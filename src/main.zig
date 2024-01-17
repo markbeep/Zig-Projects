@@ -5,13 +5,21 @@ const c = @cImport({
     @cInclude("termios.h");
     @cInclude("unistd.h");
     @cInclude("ctype.h");
+    @cInclude("sys/ioctl.h");
 });
 
-const terminalErr = error{ GETADDR, SETADDR };
+const terminalErr = error{ GETADDR, SETADDR, IOCTL };
 
 const Terminal = struct {
+    /// If the window should be open right now. Setting this to false will close the terminal.
     open: bool = false,
     orig_termios: c.termios = undefined,
+    width: i32 = undefined,
+    height: i32 = undefined,
+    /// left is 1
+    x: i32 = 1,
+    /// top is 1
+    y: i32 = 1,
 
     pub fn init(self: *Terminal) !void {
         // save screen and clear it
@@ -32,6 +40,8 @@ const Terminal = struct {
         if (c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &raw) != 0)
             return terminalErr.SETADDR;
 
+        try self.checkTerminalSize();
+
         self.open = true;
     }
 
@@ -44,9 +54,54 @@ const Terminal = struct {
 
         self.open = false;
     }
+
+    /// Checks the current width and height of the terminal to adjust accordingly
+    fn checkTerminalSize(self: *Terminal) !void {
+        var w: c.winsize = undefined;
+        if (c.ioctl(0, c.TIOCGWINSZ, &w) != 0)
+            return terminalErr.IOCTL;
+        self.width = w.ws_col;
+        self.height = w.ws_row;
+        if (self.width < self.x) self.x = self.width;
+        if (self.height < self.y) self.y = self.height;
+    }
+
+    fn render(self: *Terminal) !void {
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("\x1b[{d};{d}H", .{ self.y, self.x });
+    }
+
+    fn handleInput(self: *Terminal, buf: [3]u8) !void {
+        const char = buf[0];
+        if (char == 'q') {
+            self.open = false;
+            return;
+        }
+        if (c.iscntrl(char) == 0) {
+            std.debug.print("CONTR = {u}\n\r", .{char});
+        } else if (char == 27) {
+            switch (buf[2]) {
+                'A' => term.y = @max(1, @min(term.y - 1, term.height)),
+                'B' => term.y = @max(1, @min(term.y + 1, term.height)),
+                'C' => term.x = @max(1, @min(term.x + 1, term.width)),
+                'D' => term.x = @max(1, @min(term.x - 1, term.width)),
+                else => std.debug.print("UNKNWN = {u}\n\r", .{buf[2]}),
+            }
+        } else {
+            std.debug.print("CHAR = {d}\n\r", .{char});
+        }
+    }
 };
 
 var term = Terminal{};
+
+fn handleSigInt(_: c_int) callconv(.C) void {
+    term.open = false;
+}
+
+fn handleSigWinch(_: c_int) callconv(.C) void {
+    term.checkTerminalSize() catch unreachable;
+}
 
 pub fn main() !void {
     try term.init();
@@ -59,29 +114,21 @@ pub fn main() !void {
         .flags = 0,
     }, null);
 
+    try std.os.sigaction(os.SIG.WINCH, &os.Sigaction{
+        .handler = .{ .handler = handleSigWinch },
+        .mask = os.empty_sigset,
+        .flags = 0,
+    }, null);
+
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("PRESS 'q' TO EXIT\n\r", .{});
+
     const stdin = std.io.getStdIn().reader();
     while (term.open) {
         var buf: [3]u8 = undefined;
         const size = try stdin.read(&buf);
         if (size == 0) continue;
-        const char = buf[0];
-        if (char == 'q') break;
-        if (c.iscntrl(char) == 0) {
-            std.debug.print("INPUT = {u}\n\r", .{char});
-        } else if (char == 27) {
-            switch (buf[2]) {
-                'A' => std.debug.print("UP\n\r", .{}),
-                'B' => std.debug.print("DOWN\n\r", .{}),
-                'C' => std.debug.print("RIGHT\n\r", .{}),
-                'D' => std.debug.print("LEFT\n\r", .{}),
-                else => std.debug.print("CONTR = {u}\n\r", .{buf[2]}),
-            }
-        } else {
-            std.debug.print("CHAR = {d}\n\r", .{char});
-        }
+        try term.handleInput(buf);
+        try term.render();
     }
-}
-
-fn handleSigInt(_: c_int) callconv(.C) void {
-    term.open = false;
 }
