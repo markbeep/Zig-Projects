@@ -135,14 +135,20 @@ const Terminal = struct {
         switch (char) {
             '\n' => {
                 // at the end of the line
-
+                var line = &self.content.items[@intCast(self.y)];
+                const maxX: i32 = @intCast(line.items.len);
                 self.y += 1;
-                self.x = 0;
                 if (self.content.items.len <= self.y) {
                     try self.content.append(std.ArrayList(u8).init(self.allocator));
                 } else {
                     try self.content.insert(@intCast(self.y), std.ArrayList(u8).init(self.allocator));
                 }
+                if (self.x != maxX) { // prepend line content to next line
+                    var newLine = &self.content.items[@intCast(self.y)];
+                    try newLine.insertSlice(0, line.items[@intCast(self.x)..]);
+                    try line.resize(@intCast(self.x));
+                }
+                self.x = 0;
             },
             else => {
                 var line = &self.content.items[@intCast(self.y)];
@@ -177,10 +183,21 @@ const Terminal = struct {
                 },
                 'C' => {
                     const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    self.x = @min(self.x + 1, maxX);
+                    if (self.x == maxX and self.y != maxY) { // go to beginning of next line
+                        self.y += 1;
+                        self.x = 0;
+                    } else {
+                        self.x = @min(self.x + 1, maxX);
+                    }
                 },
                 'D' => {
-                    self.x = @max(0, self.x - 1);
+                    if (self.x == 0 and self.y != 0) { // go to end of previous line
+                        self.y -= 1;
+                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+                        self.x = maxX;
+                    } else {
+                        self.x = @max(0, self.x - 1);
+                    }
                 },
                 else => std.debug.print("UNKNWN = {u}\n\r", .{buf[2]}),
             }
@@ -189,21 +206,23 @@ const Terminal = struct {
                 13 => try self.setChar('\n'),
                 127 => {
                     var line = &self.content.items[@intCast(self.y)];
-                    if (line.items.len == 0) {
+                    if (line.items.len == 0 or self.x == 0) {
                         if (self.content.items.len == 1) {
                             return;
+                        }
+                        if (self.x == 0) {
+                            var previousLine = &self.content.items[@intCast(self.y - 1)];
+                            self.x = @intCast(previousLine.items.len);
+                            try previousLine.appendSlice(line.items);
+                        } else {
+                            // go to end of line before
+                            self.x = @intCast(self.content.items[@intCast(self.y)].items.len);
                         }
                         // delete line
                         line.deinit();
                         _ = self.content.orderedRemove(@intCast(self.y));
                         self.y -= 1;
-                        // go to end of line before
-                        self.x = @intCast(self.content.items[@intCast(self.y)].items.len);
                     } else {
-                        if (self.x == 0) {
-                            // TODO: UNHANDLED CASE. Remove line and add contents to line before
-                            return;
-                        }
                         // delete char we're on
                         _ = line.orderedRemove(@intCast(self.x - 1));
                         self.x -= 1;
