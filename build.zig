@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // const lib = b.addStaticLibrary(.{
-    //     .name = "Texty",
+    //     .name = "Tez",
     //     // In this case the main source file is merely a path, however, in more
     //     // complicated build scripts, this could be a generated file.
     //     .root_source_file = .{ .path = "src/root.zig" },
@@ -30,12 +30,13 @@ pub fn build(b: *std.Build) void {
     // b.installArtifact(lib);
 
     const exe = b.addExecutable(.{
-        .name = "Texty",
+        .name = "Tez",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
 
+    // add libc
     exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
@@ -81,6 +82,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // add libc
+    exe_unit_tests.linkLibC();
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

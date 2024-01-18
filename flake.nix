@@ -29,6 +29,29 @@
                 zls-pkg = zls.packages.${system}.zls;
             in
             {
+                packages = rec {
+                    default = tez;
+                    Tez = tez;
+                    tez = pkgs.stdenv.mkDerivation rec {
+                            name = "Tez";
+                            src = ./.;
+
+                            buildInputs = [ zig pkgs.autoPatchelfHook ];
+                            dontConfigure = true;
+
+                            preBuild = ''
+                                # Necessary for zig cache to work
+                                export HOME=$TMPDIR
+                            '';
+
+                            installPhase = ''
+                                runHook preInstall
+                                zig build -Doptimize=ReleaseFast --prefix $out install
+                                runHook postInstall
+                            '';
+                        };
+                };
+                
                 devShells.default = pkgs.mkShell {
                     buildInputs = [ 
                         zig
