@@ -32,6 +32,7 @@ const Terminal = struct {
     scroll: i32 = 0,
     content: std.ArrayList(std.ArrayList(u8)) = undefined,
     allocator: std.mem.Allocator = undefined,
+    filepath: ?[]const u8 = null,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 3;
@@ -54,15 +55,24 @@ const Terminal = struct {
         raw.c_lflag &= ~(@as(u32, c.ECHO | c.ICANON | c.ISIG | c.IEXTEN));
         raw.c_cflag |= @as(u32, c.CS8);
         raw.c_cc[c.VMIN] = 0;
-        raw.c_cc[c.VTIME] = 1; // 1=100ms
+        raw.c_cc[c.VTIME] = 1; // 1=100ms timeout
         if (c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &raw) != 0)
             return terminalErr.SETADDR;
 
         try self.checkTerminalSize();
 
-        // initialize first line
         self.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
-        try self.content.append(std.ArrayList(u8).init(allocator));
+
+        // check arguments
+        const args = try std.process.argsAlloc(self.allocator);
+        defer self.allocator.free(args);
+        if (args.len >= 2) {
+            try self.openFile(args[1]);
+            self.filepath = args[1];
+        } else {
+            // initialize first line
+            try self.content.append(std.ArrayList(u8).init(allocator));
+        }
 
         self.open = true;
     }
@@ -73,6 +83,10 @@ const Terminal = struct {
 
         // restore terminal mode from before
         _ = c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &self.orig_termios);
+
+        if (self.filepath) |path| {
+            self.saveFile(path) catch unreachable;
+        }
 
         for (self.content.items) |item| {
             item.deinit();
@@ -254,6 +268,44 @@ const Terminal = struct {
         } else {
             try self.setChar(char);
         }
+    }
+
+    fn openFile(self: *Self, path: []const u8) !void {
+        // clear previously existing lines
+        for (self.content.items) |item| {
+            item.deinit();
+        }
+        try self.content.resize(0);
+
+        var file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+
+        var buf_reader = std.io.bufferedReader(file.reader());
+        var in_stream = buf_reader.reader();
+
+        // TODO: only read the lines which we can see on the screen
+        // max line size of 2GBs
+        while (try in_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 2 << 30)) |line| {
+            defer self.allocator.free(line);
+            try self.content.append(std.ArrayList(u8).init(self.allocator));
+            var list = &self.content.items[self.content.items.len - 1];
+            try list.appendSlice(line);
+        }
+    }
+
+    fn saveFile(self: *Self, path: []const u8) !void {
+        // TODO: if file does't exist yet, create it
+        var file = try std.fs.cwd().openFile(path, .{ .mode = std.fs.File.OpenMode.write_only });
+        defer file.close();
+
+        var buf_writer = std.io.bufferedWriter(file.writer());
+        var stream = buf_writer.writer();
+
+        for (self.content.items) |line| {
+            _ = try stream.write(line.items);
+            try stream.writeByte('\n');
+        }
+        try buf_writer.flush();
     }
 };
 

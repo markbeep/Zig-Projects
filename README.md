@@ -2,15 +2,23 @@
 
 ### Lightweight text editor written in Zig
 
-Sample of what the editor looks like now. It is very barebones as of now.
+Tez is a side project to learn Zig better while also making a lightweight and usable editor.
 
 ![Hello world example in zig using Tez](media/hello_world.png)
 
-## Reality
+## Usage
 
-This is just a project to learn Zig more indepth. The goal is to build a simple but well working TUI editor to edit files quickly.
+Tez currently has a very limited functionality. For now, you can only open and edit already existing files:
 
-As of now, there's not really any functionality. It allows for some text to be written, but there's no support to open, edit or even save any files yet.
+```sh
+tez sample.txt
+```
+
+It cannot create new files right now. If you give a non-existing file as the argument, tez will crash.
+
+You can also just open the editor by using `tez` on its own. Currently pressing `q` will close the program
+so there's no way to even type the letter Q. In the future control keys or a mode-system like in vim will be
+added.
 
 ## Local Development
 
