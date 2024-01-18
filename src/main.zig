@@ -24,10 +24,12 @@ const Terminal = struct {
     orig_termios: c.termios = undefined,
     width: i32 = undefined,
     height: i32 = undefined,
-    /// left is 0
-    /// top is 0
+    /// The total line the cursor is currently on. Top-most line is 0.
     y: i32 = 0,
+    /// The horizontal position the cursor is currently on. Left-most position is 0.
     x: i32 = 0,
+    /// The scrolled line offset of the current view.
+    scroll: i32 = 0,
     content: std.ArrayList(std.ArrayList(u8)) = undefined,
     allocator: std.mem.Allocator = undefined,
 
@@ -107,12 +109,21 @@ const Terminal = struct {
 
         try bw.print("\x1b[2J", .{}); // erase screen
 
-        for (self.content.items, 1..) |line, y| {
-            try moveCursorBuffered(bw, 0, @intCast(y));
-            try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y}); // grey line number
+        // moves the screen accordingly if the cursor were to be placed outside
+        if (self.y < self.scroll) {
+            self.scroll = self.y;
+        } else if (self.y > self.scroll + self.height - 2) {
+            self.scroll = self.y - self.height + 2;
+        }
+
+        try moveCursorBuffered(bw, 0, 0);
+        for (self.content.items[@intCast(self.scroll)..], 0..) |line, y| {
+            if (y > self.height - 2) break;
+            try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y + @as(usize, @intCast(self.scroll)) + 1}); // grey line number
             for (line.items) |char| {
                 try bw.print("{u}", .{char});
             }
+            try bw.print("\n\r", .{});
         }
 
         // Draw name at bottom of editor
@@ -120,13 +131,13 @@ const Terminal = struct {
         try bw.print("\x1b[1;43m    Tez  |  'q' to quit", .{});
 
         // fill bottom line
-        for (23..@intCast(self.width)) |_| {
+        for ((23)..@intCast(self.width)) |_| {
             try bw.print(" ", .{});
         }
         try bw.print("\x1b[0m", .{});
 
         // move cursor to where cursor should be
-        try moveCursorBuffered(bw, self.x + 1 + xOffset, self.y + 1);
+        try moveCursorBuffered(bw, self.x + 1 + xOffset, self.y + 1 - self.scroll);
 
         try buf.flush();
     }
@@ -171,17 +182,27 @@ const Terminal = struct {
         if (char == 27) {
             const maxY: i32 = @intCast(self.content.items.len - 1);
             switch (buf[2]) {
-                'A' => {
-                    self.y = @max(0, self.y - 1);
-                    const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    self.x = @min(self.x, maxX);
+                'A' => { // UP
+                    if (self.y == 0) {
+                        self.x = 0;
+                    } else {
+                        self.y = @max(0, self.y - 1);
+                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+                        self.x = @min(self.x, maxX);
+                    }
                 },
-                'B' => {
-                    self.y = @min(self.y + 1, maxY);
+                'B' => { // DOWN
+                    if (self.y != maxY) {
+                        self.y = @min(self.y + 1, maxY);
+                    }
                     const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    self.x = @min(self.x, maxX);
+                    if (self.y != maxY) {
+                        self.x = @min(self.x, maxX);
+                    } else {
+                        self.x = maxX;
+                    }
                 },
-                'C' => {
+                'C' => { // RIGHT
                     const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
                     if (self.x == maxX and self.y != maxY) { // go to beginning of next line
                         self.y += 1;
@@ -190,7 +211,7 @@ const Terminal = struct {
                         self.x = @min(self.x + 1, maxX);
                     }
                 },
-                'D' => {
+                'D' => { // LEFT
                     if (self.x == 0 and self.y != 0) { // go to end of previous line
                         self.y -= 1;
                         const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
