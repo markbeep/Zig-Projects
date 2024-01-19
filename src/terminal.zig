@@ -25,10 +25,14 @@ pub const Terminal = struct {
     /// The horizontal position the cursor is currently on. Left-most position is 0.
     x: i32 = 0,
     /// The scrolled line offset of the current view.
-    scroll: i32 = 0,
+    scrollY: i32 = 0,
+    scrollX: i32 = 0,
     content: std.ArrayList(std.ArrayList(u8)) = undefined,
     allocator: std.mem.Allocator = undefined,
     filepath: ?[]const u8 = null,
+    // If the user has requested to exit the program (i.e. using CTRL-C)
+    exitState: bool = false,
+    pendingChanges: bool = false,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 3;
@@ -126,29 +130,35 @@ pub const Terminal = struct {
         var buf = std.io.bufferedWriter(stdout);
         var bw = buf.writer();
 
-        try bw.print("\x1b[2J", .{}); // erase screen
+        // try bw.print("\x1b[2J", .{}); // erase screen
 
         try self.renderStatusBar(bw);
 
         // moves the screen accordingly if the cursor were to be placed outside
-        if (self.y < self.scroll) {
-            self.scroll = self.y;
-        } else if (self.y > self.scroll + self.height - self.statusLines - 1) {
-            self.scroll = self.y - self.height + self.statusLines + 1;
+        if (self.y < self.scrollY) {
+            self.scrollY = self.y;
+        } else if (self.y > self.scrollY + self.height - self.statusLines - 1) {
+            self.scrollY = self.y - self.height + self.statusLines + 1;
+        }
+        if (self.x < self.scrollX) {
+            self.scrollX = self.x;
+        } else if (self.x > self.scrollX + self.width - 1 - xOffset) {
+            self.scrollX = self.x - self.width + 1 + xOffset;
         }
 
         try moveCursorBuffered(bw, 0, self.lineStart);
-        for (self.content.items[@intCast(self.scroll)..], 0..) |line, y| {
-            if (y > self.height - 2) break;
-            try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y + @as(usize, @intCast(self.scroll)) + 1}); // grey line number
-            for (line.items) |char| {
+        for (self.content.items[@intCast(self.scrollY)..], 0..) |line, y| {
+            if (y > self.height - self.statusLines - 1) break;
+            try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y + @as(usize, @intCast(self.scrollY)) + 1}); // grey line number
+            for (line.items, 0..) |char, x| {
+                if (x > self.width - 1 - xOffset) break;
                 try bw.print("{u}", .{char});
             }
             try bw.print("\n\r", .{});
         }
 
         // move cursor to where cursor should be
-        try moveCursorBuffered(bw, self.x + 1 + xOffset, self.y + 1 - self.scroll);
+        try moveCursorBuffered(bw, self.x + 1 + xOffset - self.scrollX, self.y + 1 - self.scrollY);
 
         try buf.flush();
     }
@@ -156,16 +166,24 @@ pub const Terminal = struct {
     fn renderStatusBar(self: *Self, bw: anytype) !void {
         self.statusLines += 1;
         try moveCursorBuffered(bw, 0, self.height);
-        try bw.print("\x1b[1;43m    Tez  |  'q' to quit", .{});
-
+        var spacesToPrint: usize = 25;
+        if (self.exitState) {
+            try bw.print("\x1b[1;43m    Tez  |  You have pending changes. 'C-c' to discard & exit", .{});
+            spacesToPrint = 61;
+        } else {
+            try bw.print("\x1b[1;43m    Tez  |  'C-c' to quit", .{});
+        }
         // fill bottom line
-        for ((23)..@intCast(self.width)) |_| {
-            try bw.print(" ", .{});
+        if (spacesToPrint < self.width) {
+            for ((spacesToPrint)..@intCast(self.width)) |_| {
+                try bw.print(" ", .{});
+            }
         }
         try bw.print("\x1b[0m", .{});
     }
 
     fn setChar(self: *Self, char: u8) !void {
+        self.pendingChanges = true;
         switch (char) {
             '\n' => {
                 // at the end of the line
@@ -198,10 +216,6 @@ pub const Terminal = struct {
 
     pub fn handleInput(self: *Self, buf: [3]u8) !void {
         const char = buf[0];
-        if (char == 'q') {
-            self.open = false;
-            return;
-        }
         if (char == 27) {
             const maxY: i32 = @intCast(self.content.items.len - 1);
             switch (buf[2]) {
@@ -243,12 +257,14 @@ pub const Terminal = struct {
                         self.x = @max(0, self.x - 1);
                     }
                 },
-                else => std.debug.print("UNKNWN = {u}\n\r", .{buf[2]}),
+                51 => {}, // DELETE
+                170 => {}, // ESCAPE
+                else => std.debug.print("UNKNWN = {d}\n\r", .{buf[2]}),
             }
         } else if (c.iscntrl(char) != 0) {
             switch (char) {
                 13 => try self.setChar('\n'),
-                127 => {
+                127 => { // delete (backspace)
                     var line = &self.content.items[@intCast(self.y)];
                     if (line.items.len == 0 or self.x == 0) {
                         if (self.content.items.len == 1) {
@@ -271,7 +287,17 @@ pub const Terminal = struct {
                         _ = line.orderedRemove(@intCast(self.x - 1));
                         self.x -= 1;
                     }
-                }, // delete (backspace)
+                },
+                3 => { // CTRL-C
+                    if (self.exitState or !self.pendingChanges) {
+                        self.open = false;
+                        return;
+                    }
+                    self.exitState = true;
+                },
+                19 => {}, // CTRL-S
+                21 => {}, // CTRL-U
+                23 => {}, // CTRL-W
                 else => std.debug.print("CONTR = {d}\n\r", .{char}),
             }
         } else {
