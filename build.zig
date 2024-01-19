@@ -75,6 +75,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    lib_unit_tests.linkLibC();
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
@@ -83,9 +84,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // add libc
     exe_unit_tests.linkLibC();
-
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to

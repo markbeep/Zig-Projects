@@ -130,7 +130,7 @@ pub const Terminal = struct {
         var buf = std.io.bufferedWriter(stdout);
         var bw = buf.writer();
 
-        // try bw.print("\x1b[2J", .{}); // erase screen
+        try bw.print("\x1b[2J", .{}); // erase screen
 
         try self.renderStatusBar(bw);
 
@@ -151,7 +151,8 @@ pub const Terminal = struct {
             if (y > self.height - self.statusLines - 1) break;
             try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y + @as(usize, @intCast(self.scrollY)) + 1}); // grey line number
             for (line.items, 0..) |char, x| {
-                if (x > self.width - 1 - xOffset) break;
+                if (x > self.width - 1 - xOffset + self.scrollX) break;
+                if (x < self.scrollX) continue;
                 try bw.print("{u}", .{char});
             }
             try bw.print("\n\r", .{});
@@ -173,13 +174,20 @@ pub const Terminal = struct {
         } else {
             try bw.print("\x1b[1;43m    Tez  |  'C-c' to quit", .{});
         }
+        var rightSize: i32 = 5;
+        if (self.x > 0) {
+            rightSize += std.math.log10_int(@as(u32, @intCast(self.x + 1)));
+        }
+        if (self.y > 0) {
+            rightSize += std.math.log10_int(@as(u32, @intCast(self.y + 1)));
+        }
         // fill bottom line
-        if (spacesToPrint < self.width) {
-            for ((spacesToPrint)..@intCast(self.width)) |_| {
+        if (spacesToPrint < self.width - rightSize) {
+            for ((spacesToPrint)..@intCast(self.width - rightSize)) |_| {
                 try bw.print(" ", .{});
             }
         }
-        try bw.print("\x1b[0m", .{});
+        try bw.print("{}:{}  \x1b[0m", .{ self.y + 1, self.x + 1 });
     }
 
     fn setChar(self: *Self, char: u8) !void {
@@ -187,8 +195,7 @@ pub const Terminal = struct {
         switch (char) {
             '\n' => {
                 // at the end of the line
-                var line = &self.content.items[@intCast(self.y)];
-                const maxX: i32 = @intCast(line.items.len);
+                const maxX = self.content.items[@intCast(self.y)].items.len;
                 self.y += 1;
                 if (self.content.items.len <= self.y) {
                     try self.content.append(std.ArrayList(u8).init(self.allocator));
@@ -196,14 +203,16 @@ pub const Terminal = struct {
                     try self.content.insert(@intCast(self.y), std.ArrayList(u8).init(self.allocator));
                 }
                 if (self.x != maxX) { // prepend line content to next line
-                    var newLine = &self.content.items[@intCast(self.y)];
-                    try newLine.insertSlice(0, line.items[@intCast(self.x)..]);
+                    const newLine = &self.content.items[@intCast(self.y)];
+                    const line = &self.content.items[@intCast(self.y - 1)];
+                    const slice = line.items[@intCast(self.x)..];
+                    try newLine.insertSlice(0, slice);
                     try line.resize(@intCast(self.x));
                 }
                 self.x = 0;
             },
             else => {
-                var line = &self.content.items[@intCast(self.y)];
+                const line = &self.content.items[@intCast(self.y)];
                 if (line.items.len <= self.x) {
                     try line.append(char);
                 } else {
@@ -229,14 +238,12 @@ pub const Terminal = struct {
                     }
                 },
                 'B' => { // DOWN
-                    if (self.y != maxY) {
-                        self.y = @min(self.y + 1, maxY);
-                    }
-                    const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    if (self.y != maxY) {
-                        self.x = @min(self.x, maxX);
+                    if (self.y == maxY) {
+                        self.x = @intCast(self.content.items[@intCast(self.y)].items.len);
                     } else {
-                        self.x = maxX;
+                        self.y += 1;
+                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+                        self.x = @min(self.x, maxX);
                     }
                 },
                 'C' => { // RIGHT
@@ -346,11 +353,3 @@ pub const Terminal = struct {
         try buf_writer.flush();
     }
 };
-
-fn printabaleStrLen(str: *[]const u8) usize {
-    var s = 0;
-    for (str) |char| {
-        if (c.isprint(char) != 0) s += 1;
-    }
-    return s;
-}

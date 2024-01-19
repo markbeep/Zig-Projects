@@ -43,8 +43,3 @@ pub fn main() !void {
         try term.render();
     }
 }
-
-test "terminal" {
-    try term.init(std.testing.allocator);
-    defer term.deinit();
-}

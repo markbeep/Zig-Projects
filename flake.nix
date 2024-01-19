@@ -56,6 +56,7 @@
                     buildInputs = [ 
                         zig
                         zls-pkg
+                        pkgs.gdb
                     ];
                 };
             }
