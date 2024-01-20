@@ -29,10 +29,12 @@ pub const Terminal = struct {
     scrollX: i32 = 0,
     content: std.ArrayList(std.ArrayList(u8)) = undefined,
     allocator: std.mem.Allocator = undefined,
-    filepath: ?[]const u8 = null,
+    filepath: ?[]u8 = null,
     // If the user has requested to exit the program (i.e. using CTRL-C)
     exitState: bool = false,
     pendingChanges: bool = false,
+    /// Banner shown on startup if no file is opened and nothing has been typed yet
+    banner: bool = false,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 3;
@@ -64,18 +66,23 @@ pub const Terminal = struct {
 
         try self.checkTerminalSize();
 
-        self.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
-
         // check arguments
         const args = try std.process.argsAlloc(self.allocator);
         defer std.process.argsFree(self.allocator, args);
 
+        self.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
+
         if (args.len >= 2) {
-            try self.openFile(args[1]);
-            self.filepath = args[1];
+            self.filepath = try self.allocator.alloc(u8, args[1].len);
+            @memcpy(self.filepath.?, args[1]);
+            self.openFile(args[1]) catch |err| {
+                if (err != std.fs.File.OpenError.FileNotFound) return err;
+                self.banner = true;
+            };
         } else {
             // initialize first line
             try self.content.append(std.ArrayList(u8).init(allocator));
+            self.banner = true;
         }
 
         self.open = true;
@@ -94,6 +101,7 @@ pub const Terminal = struct {
 
         if (self.filepath) |path| {
             self.saveFile(path) catch unreachable;
+            self.allocator.free(path);
         }
 
         for (self.content.items) |item| {
@@ -133,6 +141,9 @@ pub const Terminal = struct {
         try bw.print("\x1b[2J", .{}); // erase screen
 
         try self.renderStatusBar(bw);
+        if (self.banner) {
+            try self.renderBanner(bw);
+        }
 
         // moves the screen accordingly if the cursor were to be placed outside
         if (self.y < self.scrollY) {
@@ -172,7 +183,7 @@ pub const Terminal = struct {
             try bw.print("\x1b[1;43m    Tez  |  You have pending changes. 'C-c' to discard & exit", .{});
             spacesToPrint = 61;
         } else {
-            try bw.print("\x1b[1;43m    Tez  |  'C-c' to quit", .{});
+            try bw.print("\x1b[1;43m    Tez  |  'C-c' to exit", .{});
         }
         var rightSize: i32 = 5;
         if (self.x > 0) {
@@ -190,8 +201,34 @@ pub const Terminal = struct {
         try bw.print("{}:{}  \x1b[0m", .{ self.y + 1, self.x + 1 });
     }
 
+    fn renderBanner(self: *Self, bw: anytype) !void {
+        const actualHeight = self.height - self.statusLines - 1;
+        const actualWidth = self.width - xOffset - 1;
+        if (actualHeight < 8 or self.width < 27) return;
+        const banner = [_][]const u8{
+            "     _____",
+            "    |_   _|__ ____",
+            "      | |/ _ \\_  /",
+            "      | |  __// /",
+            "      |_|\\___/___|",
+            " Lightweight text editor",
+            "     Ctrl-C to exit",
+        };
+        const startY = @divFloor(actualHeight - @as(i32, @intCast(banner.len)), 2);
+        const startX = @divFloor(actualWidth - 19, 2);
+        if (startY <= 1 or startX <= 1) return;
+        try moveCursorBuffered(bw, 0, startY);
+        for (banner) |line| {
+            for (0..@intCast(startX)) |_| {
+                try bw.print(" ", .{});
+            }
+            try bw.print("{s}\n\r", .{line});
+        }
+    }
+
     fn setChar(self: *Self, char: u8) !void {
         self.pendingChanges = true;
+        self.banner = false;
         switch (char) {
             '\n' => {
                 // at the end of the line
@@ -313,23 +350,36 @@ pub const Terminal = struct {
     }
 
     fn openFile(self: *Self, path: []const u8) !void {
-        // clear previously existing lines
+        // clear previously existing lines (incase we want to open a new file)
         for (self.content.items) |item| {
             item.deinit();
         }
         try self.content.resize(0);
 
-        var file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
+        // add an initial first line
+        // Handles the case of opening a new file since the next part will return an error
+        try self.content.append(std.ArrayList(u8).init(self.allocator));
 
-        var buf_reader = std.io.bufferedReader(file.reader());
+        var file: ?std.fs.File = null;
+        if (std.fs.cwd().openFile(path, .{})) |f| {
+            file = f;
+        } else |err| {
+            return err;
+        }
+        defer file.?.close();
+
+        var buf_reader = std.io.bufferedReader(file.?.reader());
         var in_stream = buf_reader.reader();
 
         // TODO: only read the lines which we can see on the screen
         // max line size of 2KBs
+        var lineno: u32 = 0;
         while (try in_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 2 << 10)) |line| {
             defer self.allocator.free(line);
-            try self.content.append(std.ArrayList(u8).init(self.allocator));
+            if (lineno > 0) {
+                try self.content.append(std.ArrayList(u8).init(self.allocator));
+            }
+            lineno += 1;
             var list = &self.content.items[self.content.items.len - 1];
             try list.appendSlice(line);
         }
@@ -337,10 +387,15 @@ pub const Terminal = struct {
 
     fn saveFile(self: *Self, path: []const u8) !void {
         // create new file if non-existent
-        var file = std.fs.cwd().openFile(path, .{ .mode = std.fs.File.OpenMode.write_only }) catch |err| f: {
-            if (err == std.fs.File.OpenError.FileNotFound) return err;
-            break :f try std.fs.cwd().createFile(path, .{});
-        };
+        var file: std.fs.File = undefined;
+        const fileUnion = std.fs.cwd().openFile(path, .{ .mode = std.fs.File.OpenMode.write_only });
+        if (fileUnion) |f| {
+            file = f;
+        } else |err| {
+            if (err != std.fs.File.OpenError.FileNotFound) return err;
+            file = try std.fs.cwd().createFile(path, .{});
+        }
+
         defer file.close();
 
         var buf_writer = std.io.bufferedWriter(file.writer());
