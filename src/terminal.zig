@@ -37,8 +37,17 @@ pub const Terminal = struct {
     banner: bool = false,
 
     const lineNumberPadding = 4;
-    const xOffset = lineNumberPadding + 3;
+    const xOffset = lineNumberPadding + 2;
     const Self = @This();
+
+    const colors = struct {
+        // TODO: involve the background without a massive performance drop
+        const bg = "\x1b[48;5;234m";
+        const text = "";
+        const offset = "\x1b[38;5;240m";
+        const zero = "\x1b[0m";
+        const status = "\x1b[1;48;5;214m";
+    };
 
     pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
         self.allocator = allocator;
@@ -160,7 +169,7 @@ pub const Terminal = struct {
         try moveCursorBuffered(bw, 0, self.lineStart);
         for (self.content.items[@intCast(self.scrollY)..], 0..) |line, y| {
             if (y > self.height - self.statusLines - 1) break;
-            try bw.print("\x1b[38;5;240m{d: >4} | \x1b[0m", .{y + @as(usize, @intCast(self.scrollY)) + 1}); // grey line number
+            try bw.print("{s}{d: >4}  \x1b[0m", .{ colors.offset, y + @as(usize, @intCast(self.scrollY)) + 1 }); // grey line number
             for (line.items, 0..) |char, x| {
                 if (x > self.width - 1 - xOffset + self.scrollX) break;
                 if (x < self.scrollX) continue;
@@ -180,12 +189,12 @@ pub const Terminal = struct {
         try moveCursorBuffered(bw, 0, self.height);
         var spacesToPrint: usize = 25;
         if (self.exitState) {
-            try bw.print("\x1b[1;43m    Tez  |  You have pending changes. 'C-c' to discard & exit", .{});
+            try bw.print("{s}    Tez  |  You have pending changes. 'C-c' to discard & exit", .{colors.status});
             spacesToPrint = 61;
         } else {
-            try bw.print("\x1b[1;43m    Tez  |  'C-c' to exit", .{});
+            try bw.print("{s}    Tez  |  'C-c' to exit", .{colors.status});
         }
-        var rightSize: i32 = 5;
+        var rightSize: i32 = 6;
         if (self.x > 0) {
             rightSize += std.math.log10_int(@as(u32, @intCast(self.x + 1)));
         }
@@ -198,7 +207,7 @@ pub const Terminal = struct {
                 try bw.print(" ", .{});
             }
         }
-        try bw.print("{}:{}  \x1b[0m", .{ self.y + 1, self.x + 1 });
+        try bw.print("{}:{}   \x1b[0m", .{ self.y + 1, self.x + 1 });
     }
 
     fn renderBanner(self: *Self, bw: anytype) !void {
