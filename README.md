@@ -29,9 +29,8 @@ Non-exhaustive list of current keybinds:
 - CTRL-D: Jump down half a page
 - CTRL-U: Jump up half a page
 
-You can also just open the editor by using `tez` on its own. Currently pressing `q` will close the program
-so there's no way to even type the letter Q. In the future control keys or a mode-system like in vim will be
-added.
+You can also just open the editor by using `tez` on its own. Currently there's no way to save
+what written to a file if Tez is opened without a path.
 
 ## Local Development
 
