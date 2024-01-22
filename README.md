@@ -4,17 +4,30 @@
 
 Tez is a side project to learn Zig better while also making a lightweight and usable editor.
 
-![Hello world example in zig using Tez](media/hello_world.png)
+![Hello world example in zig using Tez](media/start.png)
 
 ## Usage
 
-Tez currently has a very limited functionality. For now, you can only open and edit already existing files:
+Tez currently has limited functionality. You can open and edit files as of now. There's no LSP, syntax highlighting or
+proper error handling as of now. If you try to create a file in a non-existent directory it will crash when you try to save
+as of now. Additionally, if you open Tez without specifying a file, you can't open a new file buffer yet.
 
 ```sh
 tez sample.txt
 ```
 
-It cannot create new files right now. If you give a non-existing file as the argument, tez will crash.
+## Keybinds
+The editor is non-modal as of now. Keybinds are a mix of useful VIM and VSC keybinds.
+Movement is done with the arrow keys (sorry VIM diehards).
+
+Non-exhaustive list of current keybinds:
+
+- HOME: Jump to start of line
+- END: Jump to end of line
+- CTRL-S: Save file
+- CTRL-C: Close file (without saving)
+- CTRL-D: Jump down half a page
+- CTRL-U: Jump up half a page
 
 You can also just open the editor by using `tez` on its own. Currently pressing `q` will close the program
 so there's no way to even type the letter Q. In the future control keys or a mode-system like in vim will be

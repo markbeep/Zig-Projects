@@ -1,3 +1,5 @@
+const TEZ_VERSION = "v0.0.2";
+
 const std = @import("std");
 const c = @cImport({
     @cInclude("termios.h");
@@ -12,6 +14,7 @@ const terminalErr = error{ GETADDR, SETADDR, IOCTL };
 var orig_termios: c.termios = undefined;
 
 pub const Terminal = struct {
+    const Self = @This();
     /// If the window should be open right now. Setting this to false will close the terminal.
     open: bool = false,
     width: i32 = undefined,
@@ -30,15 +33,17 @@ pub const Terminal = struct {
     content: std.ArrayList(std.ArrayList(u8)) = undefined,
     allocator: std.mem.Allocator = undefined,
     filepath: ?[]u8 = null,
-    // If the user has requested to exit the program (i.e. using CTRL-C)
+    /// If the user has requested to exit the program (i.e. using CTRL-C)
     exitState: bool = false,
     pendingChanges: bool = false,
     /// Banner shown on startup if no file is opened and nothing has been typed yet
     banner: bool = false,
+    // TODO: Look into how this can be fixed so it works in all terminals.
+    /// For keys like DELETE which add an extra character afterwards.
+    ignoreNextChar: bool = false,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 2;
-    const Self = @This();
 
     const colors = struct {
         // TODO: involve the background without a massive performance drop
@@ -109,7 +114,6 @@ pub const Terminal = struct {
         Terminal.restoreTerminal();
 
         if (self.filepath) |path| {
-            self.saveFile(path) catch unreachable;
             self.allocator.free(path);
         }
 
@@ -221,7 +225,7 @@ pub const Terminal = struct {
             "      | |  __// /",
             "      |_|\\___/___|",
             " Lightweight text editor",
-            "     Ctrl-C to exit",
+            "         " ++ TEZ_VERSION,
         };
         const startY = @divFloor(actualHeight - @as(i32, @intCast(banner.len)), 2);
         const startX = @divFloor(actualWidth - 19, 2);
@@ -269,78 +273,119 @@ pub const Terminal = struct {
         }
     }
 
+    fn moveUp(self: *Self, times: u32) void {
+        for (0..times) |_| {
+            if (self.y == 0) {
+                self.x = 0;
+            } else {
+                self.y = @max(0, self.y - 1);
+                const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+                self.x = @min(self.x, maxX);
+            }
+        }
+    }
+
+    fn moveDown(self: *Self, times: u32) void {
+        for (0..times) |_| {
+            if (self.y == self.getMaxY()) {
+                self.x = self.getMaxX(self.y);
+            } else {
+                self.y += 1;
+                self.x = @min(self.x, self.getMaxX(self.y));
+            }
+        }
+    }
+
+    fn moveRight(self: *Self, times: u32) void {
+        const maxY: i32 = @intCast(self.content.items.len - 1);
+        for (0..times) |_| {
+            const maxX = self.getMaxX(self.y);
+            if (self.x == maxX and self.y != maxY) { // go to beginning of next line
+                self.y += 1;
+                self.x = 0;
+            } else {
+                self.x = @min(self.x + 1, maxX);
+            }
+        }
+    }
+
+    fn moveLeft(self: *Self, times: u32) void {
+        for (0..times) |_| {
+            if (self.x == 0 and self.y != 0) { // go to end of previous line
+                self.y -= 1;
+                self.x = self.getMaxX(self.y);
+            } else {
+                self.x = @max(0, self.x - 1);
+            }
+        }
+    }
+
+    /// Deletes one character to the left
+    fn delete(self: *Self, times: u32) !void {
+        self.pendingChanges = self.pendingChanges or times > 0;
+        for (0..times) |_| {
+            var line = &self.content.items[@intCast(self.y)];
+            if (line.items.len == 0 or self.x == 0) {
+                if (self.content.items.len == 1) {
+                    return;
+                }
+                if (self.x == 0) {
+                    var previousLine = &self.content.items[@intCast(self.y - 1)];
+                    self.x = @intCast(previousLine.items.len);
+                    try previousLine.appendSlice(line.items);
+                } else {
+                    // go to end of line before
+                    self.x = self.getMaxX(self.y);
+                }
+                // delete line
+                line.deinit();
+                _ = self.content.orderedRemove(@intCast(self.y));
+                self.y -= 1;
+            } else {
+                // delete char we're on
+                _ = line.orderedRemove(@intCast(self.x - 1));
+                self.x -= 1;
+            }
+        }
+    }
+
+    fn getMaxY(self: *Self) i32 {
+        return @intCast(self.content.items.len - 1);
+    }
+
+    fn getMaxX(self: *Self, y: i32) i32 {
+        return @intCast(self.content.items[@intCast(y)].items.len);
+    }
+
     pub fn handleInput(self: *Self, buf: [3]u8) !void {
         const char = buf[0];
+        if (self.ignoreNextChar) {
+            self.ignoreNextChar = false;
+            return;
+        }
         if (char == 27) {
-            const maxY: i32 = @intCast(self.content.items.len - 1);
             switch (buf[2]) {
-                'A' => { // UP
-                    if (self.y == 0) {
-                        self.x = 0;
-                    } else {
-                        self.y = @max(0, self.y - 1);
-                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                        self.x = @min(self.x, maxX);
+                'A' => self.moveUp(1), // UP
+                'B' => self.moveDown(1), // DOWN
+                'C' => self.moveRight(1), // RIGHT
+                'D' => self.moveLeft(1), // LEFT
+                51 => { // DELETE (del)
+                    // if we're at the very last character, don't delete
+                    self.ignoreNextChar = true;
+                    if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
+                        self.moveRight(1);
+                        try self.delete(1);
                     }
                 },
-                'B' => { // DOWN
-                    if (self.y == maxY) {
-                        self.x = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    } else {
-                        self.y += 1;
-                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                        self.x = @min(self.x, maxX);
-                    }
-                },
-                'C' => { // RIGHT
-                    const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                    if (self.x == maxX and self.y != maxY) { // go to beginning of next line
-                        self.y += 1;
-                        self.x = 0;
-                    } else {
-                        self.x = @min(self.x + 1, maxX);
-                    }
-                },
-                'D' => { // LEFT
-                    if (self.x == 0 and self.y != 0) { // go to end of previous line
-                        self.y -= 1;
-                        const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                        self.x = maxX;
-                    } else {
-                        self.x = @max(0, self.x - 1);
-                    }
-                },
-                51 => {}, // DELETE
+                70 => self.x = self.getMaxX(self.y), // END
+                72 => self.x = 0, // HOME
                 170 => {}, // ESCAPE
                 else => std.debug.print("UNKNWN = {d}\n\r", .{buf[2]}),
             }
         } else if (c.iscntrl(char) != 0) {
             switch (char) {
                 13 => try self.setChar('\n'),
-                127 => { // delete (backspace)
-                    var line = &self.content.items[@intCast(self.y)];
-                    if (line.items.len == 0 or self.x == 0) {
-                        if (self.content.items.len == 1) {
-                            return;
-                        }
-                        if (self.x == 0) {
-                            var previousLine = &self.content.items[@intCast(self.y - 1)];
-                            self.x = @intCast(previousLine.items.len);
-                            try previousLine.appendSlice(line.items);
-                        } else {
-                            // go to end of line before
-                            self.x = @intCast(self.content.items[@intCast(self.y)].items.len);
-                        }
-                        // delete line
-                        line.deinit();
-                        _ = self.content.orderedRemove(@intCast(self.y));
-                        self.y -= 1;
-                    } else {
-                        // delete char we're on
-                        _ = line.orderedRemove(@intCast(self.x - 1));
-                        self.x -= 1;
-                    }
-                },
+                127 => try self.delete(1), // delete (backspace)
                 3 => { // CTRL-C
                     if (self.exitState or !self.pendingChanges) {
                         self.open = false;
@@ -348,8 +393,15 @@ pub const Terminal = struct {
                     }
                     self.exitState = true;
                 },
-                19 => {}, // CTRL-S
-                21 => {}, // CTRL-U
+                19 => {
+                    if (self.filepath) |path| {
+                        try self.saveFile(path);
+                        self.exitState = false;
+                        self.pendingChanges = false;
+                    }
+                }, // CTRL-S
+                4 => self.y = @min(self.y + @divFloor(self.height, 2), self.getMaxY()), // CTRL-D: go down half the page
+                21 => self.y = @max(self.y - @divFloor(self.height, 2), 0), // CTRL-U: go up half the page
                 23 => {}, // CTRL-W
                 else => std.debug.print("CONTR = {d}\n\r", .{char}),
             }
