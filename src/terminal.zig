@@ -9,7 +9,7 @@ const c = @cImport({
     @cInclude("stdlib.h");
 });
 
-const terminalErr = error{ GETADDR, SETADDR, IOCTL };
+const TerminalError = error{ TerminalNotSetup, GETADDR, SETADDR, IOCTL };
 
 var orig_termios: c.termios = undefined;
 
@@ -24,9 +24,14 @@ pub const Terminal = struct {
     /// The amount of lines used for status bars and not for code
     statusLines: i32 = 0,
     /// The total line the cursor is currently on. Top-most line is 0.
+    /// y can at most be the number of lines minus one. If there are 3 lines, max(y)=2.
     y: i32 = 0,
     /// The horizontal position the cursor is currently on. Left-most position is 0.
+    /// A line with 4 elements, x can be in the inclusive range [0, 4]. x=4 won't contain
+    /// a character though.
     x: i32 = 0,
+    /// The x-coordinate we were at before jumping somewhere
+    lastX: i32 = 0,
     /// The scrolled line offset of the current view.
     scrollY: i32 = 0,
     scrollX: i32 = 0,
@@ -40,7 +45,9 @@ pub const Terminal = struct {
     banner: bool = false,
     // TODO: Look into how this can be fixed so it works in all terminals.
     /// For keys like DELETE which add an extra character afterwards.
-    ignoreNextChar: bool = false,
+    ignoreChars: usize = 0,
+    isTerminalSetup: bool = false,
+    debugMode: bool = false,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 2;
@@ -54,9 +61,35 @@ pub const Terminal = struct {
         const status = "\x1b[1;48;5;214m";
     };
 
-    pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
-        self.allocator = allocator;
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        var term = Self{};
 
+        term.allocator = allocator;
+
+        // check arguments
+        const args = try std.process.argsAlloc(term.allocator);
+        defer std.process.argsFree(term.allocator, args);
+
+        term.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
+
+        if (args.len >= 2) {
+            term.filepath = try term.allocator.alloc(u8, args[1].len);
+            @memcpy(term.filepath.?, args[1]);
+            term.openFile(args[1]) catch |err| {
+                if (err != std.fs.File.OpenError.FileNotFound) return err;
+                term.banner = true;
+            };
+        } else {
+            // initialize first line
+            try term.content.append(std.ArrayList(u8).init(allocator));
+            term.banner = true;
+        }
+
+        term.open = true;
+        return term;
+    }
+
+    pub fn setupTerminal(self: *Self) !void {
         // save screen and clear it
         const stdout = std.io.getStdOut().writer();
         try stdout.print("\x1b[?1049h\x1b[2J", .{}); // open new screen, save and clear
@@ -64,7 +97,7 @@ pub const Terminal = struct {
         // enters terminal raw mode
         // source: https://viewsourcecode.org/snaptoken/kilo/02.enteringRawMode.html
         if (c.tcgetattr(c.STDIN_FILENO, &orig_termios) != 0)
-            return terminalErr.GETADDR;
+            return TerminalError.GETADDR;
         var raw = orig_termios;
         raw.c_iflag &= ~(@as(u32, c.IXON | c.ICRNL | c.ISTRIP));
         raw.c_oflag &= ~(@as(u32, c.OPOST));
@@ -73,46 +106,36 @@ pub const Terminal = struct {
         raw.c_cc[c.VMIN] = 0;
         raw.c_cc[c.VTIME] = 1; // 1=100ms timeout
         if (c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &raw) != 0)
-            return terminalErr.SETADDR;
-
-        // TODO: not executed on errors/crash
-        _ = c.atexit(Terminal.restoreTerminal);
+            return TerminalError.SETADDR;
 
         try self.checkTerminalSize();
-
-        // check arguments
-        const args = try std.process.argsAlloc(self.allocator);
-        defer std.process.argsFree(self.allocator, args);
-
-        self.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
-
-        if (args.len >= 2) {
-            self.filepath = try self.allocator.alloc(u8, args[1].len);
-            @memcpy(self.filepath.?, args[1]);
-            self.openFile(args[1]) catch |err| {
-                if (err != std.fs.File.OpenError.FileNotFound) return err;
-                self.banner = true;
-            };
-        } else {
-            // initialize first line
-            try self.content.append(std.ArrayList(u8).init(allocator));
-            self.banner = true;
-        }
-
-        self.open = true;
+        self.isTerminalSetup = true;
     }
 
-    fn restoreTerminal() callconv(.C) void {
+    pub fn restoreTerminal(self: *Self) void {
+        if (!self.isTerminalSetup) return;
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("\x1b[?1049l", .{}) catch unreachable; // restore saved screen
+        // restore terminal mode from before
         _ = c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &orig_termios);
     }
 
+    /// Listens for keypresses and handles them. This function is blocking.
+    pub fn listenForInput(self: *Self) !void {
+        if (!self.isTerminalSetup) {
+            return TerminalError.TerminalNotSetup;
+        }
+        const stdin = std.io.getStdIn().reader();
+        while (self.open) {
+            var buf: [3]u8 = undefined;
+            const size = try stdin.read(&buf);
+            if (size == 0) continue;
+            try self.handleInput(buf);
+            try self.render();
+        }
+    }
+
     pub fn deinit(self: *Self) void {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("\x1b[?1049l", .{}) catch unreachable; // restore saved screen
-
-        // restore terminal mode from before
-        Terminal.restoreTerminal();
-
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
@@ -129,7 +152,7 @@ pub const Terminal = struct {
     pub fn checkTerminalSize(self: *Self) !void {
         var w: c.winsize = undefined;
         if (c.ioctl(0, c.TIOCGWINSZ, &w) != 0)
-            return terminalErr.IOCTL;
+            return TerminalError.IOCTL;
         self.width = w.ws_col;
         self.height = w.ws_row;
         if (self.width < self.x) self.x = self.width;
@@ -151,7 +174,9 @@ pub const Terminal = struct {
         var buf = std.io.bufferedWriter(stdout);
         var bw = buf.writer();
 
-        try bw.print("\x1b[2J", .{}); // erase screen
+        if (!self.debugMode) {
+            try bw.print("\x1b[2J", .{}); // erase screen
+        }
 
         try self.renderStatusBar(bw);
         if (self.banner) {
@@ -271,32 +296,91 @@ pub const Terminal = struct {
                 self.x += 1;
             },
         }
+        self.lastX = self.x;
     }
 
-    fn moveUp(self: *Self, times: u32) void {
-        for (0..times) |_| {
-            if (self.y == 0) {
-                self.x = 0;
-            } else {
-                self.y = @max(0, self.y - 1);
-                const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                self.x = @min(self.x, maxX);
+    pub fn handleInput(self: *Self, buf: [3]u8) !void {
+        const char = buf[0];
+        if (self.ignoreChars > 0) {
+            self.ignoreChars -= 1;
+            return;
+        }
+        if (char == 27) {
+            switch (buf[2]) {
+                'A' => self.moveUp(1), // UP
+                'B' => self.moveDown(1), // DOWN
+                'C' => self.moveRight(1), // RIGHT
+                'D' => self.moveLeft(1), // LEFT
+                49 => { // CTRL SHIFT D
+                    self.debugMode = !self.debugMode;
+                    self.ignoreChars = 2;
+                },
+                51 => { // DELETE (del)
+                    // if we're at the very last character, don't delete
+                    self.ignoreChars = 1;
+                    try self.deleteRight(1);
+                },
+                70 => self.x = self.getMaxX(self.y), // END
+                72 => self.x = 0, // HOME
+                170 => {}, // ESCAPE
+                else => std.debug.print("UNKNWN = {d}\n\r", .{buf[2]}),
             }
+        } else if (c.iscntrl(char) != 0) {
+            switch (char) {
+                13 => try self.setChar('\n'),
+                127 => try self.deleteLeft(1), // delete (backspace)
+                3 => { // CTRL-C
+                    if (self.exitState or !self.pendingChanges) {
+                        self.open = false;
+                        return;
+                    }
+                    self.exitState = true;
+                },
+                19 => {
+                    if (self.filepath) |path| {
+                        try self.saveFile(path);
+                        self.exitState = false;
+                        self.pendingChanges = false;
+                    }
+                }, // CTRL-S
+                4 => self.moveDown(@intCast(@divFloor(self.height, 2))), // CTRL-D: go down half the page
+                21 => self.moveUp(@intCast(@divFloor(self.height, 2))), // CTRL-U: go up half the page
+                23 => {}, // CTRL-W
+                else => std.debug.print("CONTR = {d}\n\r", .{char}),
+            }
+        } else {
+            try self.setChar(char);
         }
     }
 
-    fn moveDown(self: *Self, times: u32) void {
-        for (0..times) |_| {
-            if (self.y == self.getMaxY()) {
-                self.x = self.getMaxX(self.y);
-            } else {
-                self.y += 1;
-                self.x = @min(self.x, self.getMaxX(self.y));
-            }
+    // #############################
+    //
+    // GENERAL FUNCTIONS
+    //
+    // #############################
+
+    pub fn moveUp(self: *Self, times: u32) void {
+        if (self.y == 0) {
+            self.x = 0;
+            self.lastX = self.x;
+        } else {
+            self.y = @max(0, self.y - @as(i32, @intCast(times)));
+            const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+            self.x = @min(self.lastX, maxX);
         }
     }
 
-    fn moveRight(self: *Self, times: u32) void {
+    pub fn moveDown(self: *Self, times: u32) void {
+        if (self.y == self.getMaxY()) {
+            self.x = self.getMaxX(self.y);
+            self.lastX = self.x;
+        } else {
+            self.y = @min(self.y + @as(i32, @intCast(times)), self.getMaxY());
+            self.x = @min(self.lastX, self.getMaxX(self.y));
+        }
+    }
+
+    pub fn moveRight(self: *Self, times: u32) void {
         const maxY: i32 = @intCast(self.content.items.len - 1);
         for (0..times) |_| {
             const maxX = self.getMaxX(self.y);
@@ -306,10 +390,11 @@ pub const Terminal = struct {
             } else {
                 self.x = @min(self.x + 1, maxX);
             }
+            self.lastX = self.x;
         }
     }
 
-    fn moveLeft(self: *Self, times: u32) void {
+    pub fn moveLeft(self: *Self, times: u32) void {
         for (0..times) |_| {
             if (self.x == 0 and self.y != 0) { // go to end of previous line
                 self.y -= 1;
@@ -317,11 +402,12 @@ pub const Terminal = struct {
             } else {
                 self.x = @max(0, self.x - 1);
             }
+            self.lastX = self.x;
         }
     }
 
     /// Deletes one character to the left
-    fn delete(self: *Self, times: u32) !void {
+    pub fn deleteLeft(self: *Self, times: u32) !void {
         self.pendingChanges = self.pendingChanges or times > 0;
         for (0..times) |_| {
             var line = &self.content.items[@intCast(self.y)];
@@ -349,68 +435,24 @@ pub const Terminal = struct {
         }
     }
 
-    fn getMaxY(self: *Self) i32 {
+    pub fn deleteRight(self: *Self, times: u32) !void {
+        for (0..times) |_| {
+            if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
+                self.moveRight(1);
+                try self.deleteLeft(1);
+            }
+        }
+    }
+
+    pub fn getMaxY(self: *Self) i32 {
         return @intCast(self.content.items.len - 1);
     }
 
-    fn getMaxX(self: *Self, y: i32) i32 {
+    pub fn getMaxX(self: *Self, y: i32) i32 {
         return @intCast(self.content.items[@intCast(y)].items.len);
     }
 
-    pub fn handleInput(self: *Self, buf: [3]u8) !void {
-        const char = buf[0];
-        if (self.ignoreNextChar) {
-            self.ignoreNextChar = false;
-            return;
-        }
-        if (char == 27) {
-            switch (buf[2]) {
-                'A' => self.moveUp(1), // UP
-                'B' => self.moveDown(1), // DOWN
-                'C' => self.moveRight(1), // RIGHT
-                'D' => self.moveLeft(1), // LEFT
-                51 => { // DELETE (del)
-                    // if we're at the very last character, don't delete
-                    self.ignoreNextChar = true;
-                    if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
-                        self.moveRight(1);
-                        try self.delete(1);
-                    }
-                },
-                70 => self.x = self.getMaxX(self.y), // END
-                72 => self.x = 0, // HOME
-                170 => {}, // ESCAPE
-                else => std.debug.print("UNKNWN = {d}\n\r", .{buf[2]}),
-            }
-        } else if (c.iscntrl(char) != 0) {
-            switch (char) {
-                13 => try self.setChar('\n'),
-                127 => try self.delete(1), // delete (backspace)
-                3 => { // CTRL-C
-                    if (self.exitState or !self.pendingChanges) {
-                        self.open = false;
-                        return;
-                    }
-                    self.exitState = true;
-                },
-                19 => {
-                    if (self.filepath) |path| {
-                        try self.saveFile(path);
-                        self.exitState = false;
-                        self.pendingChanges = false;
-                    }
-                }, // CTRL-S
-                4 => self.y = @min(self.y + @divFloor(self.height, 2), self.getMaxY()), // CTRL-D: go down half the page
-                21 => self.y = @max(self.y - @divFloor(self.height, 2), 0), // CTRL-U: go up half the page
-                23 => {}, // CTRL-W
-                else => std.debug.print("CONTR = {d}\n\r", .{char}),
-            }
-        } else {
-            try self.setChar(char);
-        }
-    }
-
-    fn openFile(self: *Self, path: []const u8) !void {
+    pub fn openFile(self: *Self, path: []const u8) !void {
         // clear previously existing lines (incase we want to open a new file)
         for (self.content.items) |item| {
             item.deinit();
@@ -446,7 +488,7 @@ pub const Terminal = struct {
         }
     }
 
-    fn saveFile(self: *Self, path: []const u8) !void {
+    pub fn saveFile(self: *Self, path: []const u8) !void {
         // create new file if non-existent
         var file: std.fs.File = undefined;
         const fileUnion = std.fs.cwd().openFile(path, .{ .mode = std.fs.File.OpenMode.write_only });
