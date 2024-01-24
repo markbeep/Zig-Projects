@@ -1,17 +1,10 @@
-const TEZ_VERSION = "v0.0.2";
+const TEZ_VERSION = "v0.0.3";
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("termios.h");
-    @cInclude("unistd.h");
-    @cInclude("ctype.h");
-    @cInclude("sys/ioctl.h");
-    @cInclude("stdlib.h");
-});
+const os = std.os;
+const ascii = std.ascii;
 
-const terminalErr = error{ GETADDR, SETADDR, IOCTL };
-
-var orig_termios: c.termios = undefined;
+const TerminalError = error{ TerminalNotSetup, IoctlFailed };
 
 pub const Terminal = struct {
     const Self = @This();
@@ -24,9 +17,14 @@ pub const Terminal = struct {
     /// The amount of lines used for status bars and not for code
     statusLines: i32 = 0,
     /// The total line the cursor is currently on. Top-most line is 0.
+    /// y can at most be the number of lines minus one. If there are 3 lines, max(y)=2.
     y: i32 = 0,
     /// The horizontal position the cursor is currently on. Left-most position is 0.
+    /// A line with 4 elements, x can be in the inclusive range [0, 4]. x=4 won't contain
+    /// a character though.
     x: i32 = 0,
+    /// The x-coordinate we were at before jumping somewhere
+    lastX: i32 = 0,
     /// The scrolled line offset of the current view.
     scrollY: i32 = 0,
     scrollX: i32 = 0,
@@ -38,9 +36,10 @@ pub const Terminal = struct {
     pendingChanges: bool = false,
     /// Banner shown on startup if no file is opened and nothing has been typed yet
     banner: bool = false,
-    // TODO: Look into how this can be fixed so it works in all terminals.
-    /// For keys like DELETE which add an extra character afterwards.
-    ignoreNextChar: bool = false,
+    debugMode: bool = false,
+    cursorMode: CursorMode = CursorMode.blinkingBar,
+
+    original_termios: ?os.termios = null,
 
     const lineNumberPadding = 4;
     const xOffset = lineNumberPadding + 2;
@@ -54,65 +53,135 @@ pub const Terminal = struct {
         const status = "\x1b[1;48;5;214m";
     };
 
-    pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
-        self.allocator = allocator;
+    /// Initialize a terminal instance.
+    ///
+    /// **Note:** This does not set up the terminal.
+    /// Use `terminal.setupTerminal()` for that.
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        var term = Self{};
 
-        // save screen and clear it
-        const stdout = std.io.getStdOut().writer();
-        try stdout.print("\x1b[?1049h\x1b[2J", .{}); // open new screen, save and clear
-
-        // enters terminal raw mode
-        // source: https://viewsourcecode.org/snaptoken/kilo/02.enteringRawMode.html
-        if (c.tcgetattr(c.STDIN_FILENO, &orig_termios) != 0)
-            return terminalErr.GETADDR;
-        var raw = orig_termios;
-        raw.c_iflag &= ~(@as(u32, c.IXON | c.ICRNL | c.ISTRIP));
-        raw.c_oflag &= ~(@as(u32, c.OPOST));
-        raw.c_lflag &= ~(@as(u32, c.ECHO | c.ICANON | c.ISIG | c.IEXTEN));
-        raw.c_cflag |= @as(u32, c.CS8);
-        raw.c_cc[c.VMIN] = 0;
-        raw.c_cc[c.VTIME] = 1; // 1=100ms timeout
-        if (c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &raw) != 0)
-            return terminalErr.SETADDR;
-
-        // TODO: not executed on errors/crash
-        _ = c.atexit(Terminal.restoreTerminal);
-
-        try self.checkTerminalSize();
+        term.allocator = allocator;
 
         // check arguments
-        const args = try std.process.argsAlloc(self.allocator);
-        defer std.process.argsFree(self.allocator, args);
+        const args = try std.process.argsAlloc(term.allocator);
+        defer std.process.argsFree(term.allocator, args);
 
-        self.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
+        term.content = std.ArrayList(std.ArrayList(u8)).init(allocator);
 
         if (args.len >= 2) {
-            self.filepath = try self.allocator.alloc(u8, args[1].len);
-            @memcpy(self.filepath.?, args[1]);
-            self.openFile(args[1]) catch |err| {
+            term.filepath = try term.allocator.alloc(u8, args[1].len);
+            @memcpy(term.filepath.?, args[1]);
+            term.openFile(args[1]) catch |err| {
                 if (err != std.fs.File.OpenError.FileNotFound) return err;
-                self.banner = true;
+                term.banner = true;
             };
         } else {
             // initialize first line
-            try self.content.append(std.ArrayList(u8).init(allocator));
-            self.banner = true;
+            try term.content.append(std.ArrayList(u8).init(allocator));
+            term.banner = true;
         }
 
-        self.open = true;
+        term.open = true;
+        return term;
     }
 
-    fn restoreTerminal() callconv(.C) void {
-        _ = c.tcsetattr(c.STDIN_FILENO, c.TCSAFLUSH, &orig_termios);
+    pub fn setupTerminal(self: *Self) !void {
+        var tty = try std.fs.cwd().openFile("/dev/tty", .{ .mode = std.fs.File.OpenMode.read_write });
+        defer tty.close();
+
+        // save the current terminal state
+        self.original_termios = try os.tcgetattr(tty.handle);
+        var raw = self.original_termios.?;
+
+        // enters terminal raw mode
+        // source: https://zig.news/lhp/want-to-create-a-tui-application-the-basics-of-uncooked-terminal-io-17gm
+        // alt source: "Raw mode" section here https://man7.org/linux/man-pages/man3/termios.3.html
+        const flags = os.linux;
+        // ECHO     Don't echo input characters.
+        // ECHONL   Don't echo newline character.
+        // ICANON   Disabele canonical mode. Read inputs byte-wise instead of line-wise.
+        // ISIG     Disable signals for Ctrl-C (SIGINT) and Ctrl-Z (SIGTSTP).
+        // EXTEN    Disable input preprocessing. This allows us to handle Ctrl-V.
+        raw.lflag &= ~(@as(os.system.tcflag_t, flags.ECHO | flags.ECHONL | flags.ICANON | flags.ISIG | flags.IEXTEN));
+        // IXON     Disable software control flow. This allows us to handle Ctrl-S and Ctrl-Q.
+        // ICRNL    Disable converting carriage returns to newlines. Allows us to handle Ctrl-J and Ctrl-M.
+        // IGNBRK   Get BREAK as an input
+        // INLCR    Disables translating NL to CR
+        // IGNCR    Does not ignore CR
+        // INPCK    Disable parity checking.
+        // ISTRIP   Disable stripping the 8th bit of characters.
+        raw.iflag &= ~(@as(
+            os.system.tcflag_t,
+            flags.IXON | flags.ICRNL | flags.BRKINT | flags.INLCR | flags.IGNCR | flags.INPCK | flags.ISTRIP,
+        ));
+        // OPOST    Disable implementation-defined output processing.
+        raw.oflag &= ~(@as(os.system.tcflag_t, flags.OPOST));
+        // CSIZE    Character size mask.
+        // PARENB   Disable parity generation on output and parity checking for input.
+        // CS8      Ensures characters to be 8 bits.
+        raw.cflag &= ~(@as(os.system.tcflag_t, flags.CSIZE | flags.PARENB));
+        raw.cflag |= @as(os.system.tcflag_t, flags.CS8);
+
+        // Timeout in deciseconds (100ms)
+        raw.cc[os.linux.V.TIME] = 1;
+        // Minimum number of characters for read
+        raw.cc[os.linux.V.MIN] = 0;
+
+        try os.tcsetattr(tty.handle, .FLUSH, raw);
+
+        const stdout = std.io.getStdOut().writer();
+        var buf = std.io.bufferedWriter(stdout);
+        var bw = buf.writer();
+
+        try bw.print("\x1b[s", .{}); // save cursor position
+        // try bw.print("\x1b[?25l", .{}); // hide cursor
+        try bw.print("\x1b[?47h", .{}); // save screen
+        try bw.print("\x1b[?1049h", .{}); // enable alternative buffer
+        try buf.flush();
+
+        try self.checkTerminalSize();
+    }
+
+    pub fn restoreTerminal(self: *Self) void {
+        if (self.original_termios == null) return;
+        var tty = std.fs.cwd().openFile(
+            "/dev/tty",
+            .{ .mode = std.fs.File.OpenMode.read_write },
+        ) catch unreachable;
+        defer tty.close();
+
+        os.tcsetattr(tty.handle, .FLUSH, self.original_termios.?) catch unreachable;
+
+        const stdout = std.io.getStdOut().writer();
+        var buf = std.io.bufferedWriter(stdout);
+        var bw = buf.writer();
+
+        bw.print("\x1b[?1049l", .{}) catch unreachable; // disable alternative buffer
+        bw.print("\x1b[?47l", .{}) catch unreachable; // restore screen
+        bw.print("\x1b[?25h", .{}) catch unreachable; // show cursor
+        bw.print("\x1b[{d} q", .{@intFromEnum(CursorMode.blinkingBlock)}) catch unreachable; // set cursor back to blinking block
+        bw.print("\x1b[u", .{}) catch unreachable; // restore cursor position
+
+        buf.flush() catch unreachable;
+    }
+
+    /// Listens for keypresses and handles them. This function is blocking.
+    pub fn listenForInput(self: *Self) !void {
+        if (self.original_termios == null) {
+            return TerminalError.TerminalNotSetup;
+        }
+        var tty = try std.fs.cwd().openFile("/dev/tty", .{ .mode = std.fs.File.OpenMode.read_write });
+        defer tty.close();
+        while (self.open) {
+            var buf: [8]u8 = undefined;
+            const size = try tty.read(&buf);
+            if (size == 0) continue;
+            try self.handleInput(buf, size);
+            try self.render();
+        }
     }
 
     pub fn deinit(self: *Self) void {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("\x1b[?1049l", .{}) catch unreachable; // restore saved screen
-
-        // restore terminal mode from before
-        Terminal.restoreTerminal();
-
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
@@ -127,9 +196,10 @@ pub const Terminal = struct {
 
     /// Checks the current width and height of the terminal to adjust accordingly
     pub fn checkTerminalSize(self: *Self) !void {
-        var w: c.winsize = undefined;
-        if (c.ioctl(0, c.TIOCGWINSZ, &w) != 0)
-            return terminalErr.IOCTL;
+        var w: os.linux.winsize = undefined;
+        if (os.system.ioctl(0, os.linux.T.IOCGWINSZ, @intFromPtr(&w)) != 0) {
+            return TerminalError.IoctlFailed;
+        }
         self.width = w.ws_col;
         self.height = w.ws_row;
         if (self.width < self.x) self.x = self.width;
@@ -151,7 +221,10 @@ pub const Terminal = struct {
         var buf = std.io.bufferedWriter(stdout);
         var bw = buf.writer();
 
-        try bw.print("\x1b[2J", .{}); // erase screen
+        if (!self.debugMode) {
+            try bw.print("\x1b[2J", .{}); // erase screen
+        }
+        try bw.print("\x1b[{d} q", .{@intFromEnum(self.cursorMode)}); // changes how the cursor looks
 
         try self.renderStatusBar(bw);
         if (self.banner) {
@@ -271,32 +344,63 @@ pub const Terminal = struct {
                 self.x += 1;
             },
         }
+        self.lastX = self.x;
     }
 
-    fn moveUp(self: *Self, times: u32) void {
-        for (0..times) |_| {
-            if (self.y == 0) {
-                self.x = 0;
-            } else {
-                self.y = @max(0, self.y - 1);
-                const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
-                self.x = @min(self.x, maxX);
+    pub fn handleInput(self: *Self, buf: [8]u8, size: usize) !void {
+        const char = buf[0];
+
+        if (char == 27) { // x1b / escape sequence
+            for (keymappings) |m| {
+                if (std.mem.eql(u8, m.s, buf[1..size])) {
+                    m.h(self);
+                    return;
+                }
             }
+            std.debug.print("MAPPING = '{s}'\n\r", .{buf[1..]});
+        } else if (ascii.isControl(char)) {
+            for (controlmappings) |m| {
+                if (m.c == char) {
+                    m.h(self);
+                    return;
+                }
+            }
+            std.debug.print("C_MAPPING = {d}\n\r", .{char});
+        } else if (ascii.isPrint(char)) {
+            try self.setChar(char);
+        } else {
+            std.debug.print("UNKNOWN = {any} | '{s}'", .{ buf[0..size], buf[0..size] });
         }
     }
 
-    fn moveDown(self: *Self, times: u32) void {
-        for (0..times) |_| {
-            if (self.y == self.getMaxY()) {
-                self.x = self.getMaxX(self.y);
-            } else {
-                self.y += 1;
-                self.x = @min(self.x, self.getMaxX(self.y));
-            }
+    // #############################
+    //
+    // GENERAL FUNCTIONS (assignable to keybinds)
+    //
+    // #############################
+
+    pub fn moveUp(self: *Self, times: u32) void {
+        if (self.y == 0) {
+            self.x = 0;
+            self.lastX = self.x;
+        } else {
+            self.y = @max(0, self.y - @as(i32, @intCast(times)));
+            const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+            self.x = @min(self.lastX, maxX);
         }
     }
 
-    fn moveRight(self: *Self, times: u32) void {
+    pub fn moveDown(self: *Self, times: u32) void {
+        if (self.y == self.getMaxY()) {
+            self.x = self.getMaxX(self.y);
+            self.lastX = self.x;
+        } else {
+            self.y = @min(self.y + @as(i32, @intCast(times)), self.getMaxY());
+            self.x = @min(self.lastX, self.getMaxX(self.y));
+        }
+    }
+
+    pub fn moveRight(self: *Self, times: u32) void {
         const maxY: i32 = @intCast(self.content.items.len - 1);
         for (0..times) |_| {
             const maxX = self.getMaxX(self.y);
@@ -306,10 +410,11 @@ pub const Terminal = struct {
             } else {
                 self.x = @min(self.x + 1, maxX);
             }
+            self.lastX = self.x;
         }
     }
 
-    fn moveLeft(self: *Self, times: u32) void {
+    pub fn moveLeft(self: *Self, times: u32) void {
         for (0..times) |_| {
             if (self.x == 0 and self.y != 0) { // go to end of previous line
                 self.y -= 1;
@@ -317,11 +422,12 @@ pub const Terminal = struct {
             } else {
                 self.x = @max(0, self.x - 1);
             }
+            self.lastX = self.x;
         }
     }
 
     /// Deletes one character to the left
-    fn delete(self: *Self, times: u32) !void {
+    pub fn deleteLeft(self: *Self, times: u32) !void {
         self.pendingChanges = self.pendingChanges or times > 0;
         for (0..times) |_| {
             var line = &self.content.items[@intCast(self.y)];
@@ -349,68 +455,24 @@ pub const Terminal = struct {
         }
     }
 
-    fn getMaxY(self: *Self) i32 {
+    pub fn deleteRight(self: *Self, times: u32) !void {
+        for (0..times) |_| {
+            if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
+                self.moveRight(1);
+                try self.deleteLeft(1);
+            }
+        }
+    }
+
+    pub fn getMaxY(self: *Self) i32 {
         return @intCast(self.content.items.len - 1);
     }
 
-    fn getMaxX(self: *Self, y: i32) i32 {
+    pub fn getMaxX(self: *Self, y: i32) i32 {
         return @intCast(self.content.items[@intCast(y)].items.len);
     }
 
-    pub fn handleInput(self: *Self, buf: [3]u8) !void {
-        const char = buf[0];
-        if (self.ignoreNextChar) {
-            self.ignoreNextChar = false;
-            return;
-        }
-        if (char == 27) {
-            switch (buf[2]) {
-                'A' => self.moveUp(1), // UP
-                'B' => self.moveDown(1), // DOWN
-                'C' => self.moveRight(1), // RIGHT
-                'D' => self.moveLeft(1), // LEFT
-                51 => { // DELETE (del)
-                    // if we're at the very last character, don't delete
-                    self.ignoreNextChar = true;
-                    if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
-                        self.moveRight(1);
-                        try self.delete(1);
-                    }
-                },
-                70 => self.x = self.getMaxX(self.y), // END
-                72 => self.x = 0, // HOME
-                170 => {}, // ESCAPE
-                else => std.debug.print("UNKNWN = {d}\n\r", .{buf[2]}),
-            }
-        } else if (c.iscntrl(char) != 0) {
-            switch (char) {
-                13 => try self.setChar('\n'),
-                127 => try self.delete(1), // delete (backspace)
-                3 => { // CTRL-C
-                    if (self.exitState or !self.pendingChanges) {
-                        self.open = false;
-                        return;
-                    }
-                    self.exitState = true;
-                },
-                19 => {
-                    if (self.filepath) |path| {
-                        try self.saveFile(path);
-                        self.exitState = false;
-                        self.pendingChanges = false;
-                    }
-                }, // CTRL-S
-                4 => self.y = @min(self.y + @divFloor(self.height, 2), self.getMaxY()), // CTRL-D: go down half the page
-                21 => self.y = @max(self.y - @divFloor(self.height, 2), 0), // CTRL-U: go up half the page
-                23 => {}, // CTRL-W
-                else => std.debug.print("CONTR = {d}\n\r", .{char}),
-            }
-        } else {
-            try self.setChar(char);
-        }
-    }
-
-    fn openFile(self: *Self, path: []const u8) !void {
+    pub fn openFile(self: *Self, path: []const u8) !void {
         // clear previously existing lines (incase we want to open a new file)
         for (self.content.items) |item| {
             item.deinit();
@@ -446,7 +508,7 @@ pub const Terminal = struct {
         }
     }
 
-    fn saveFile(self: *Self, path: []const u8) !void {
+    pub fn saveFile(self: *Self, path: []const u8) !void {
         // create new file if non-existent
         var file: std.fs.File = undefined;
         const fileUnion = std.fs.cwd().openFile(path, .{ .mode = std.fs.File.OpenMode.write_only });
@@ -468,4 +530,138 @@ pub const Terminal = struct {
         }
         try buf_writer.flush();
     }
+};
+
+/// Type of cursor to use.
+///
+/// More information: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h4-Functions-using-CSI-_-ordered-by-the-final-character-lparen-s-rparen:CSI-Ps-SP-q.1D81
+const CursorMode = enum(u4) {
+    blinkingBlock = 1,
+    steadyBlock = 2,
+    blinkingUnderline = 3,
+    steadyUnderline = 4,
+    blinkingBar = 5,
+    steadyBar = 6,
+};
+
+// Arrows
+
+fn arrowUp(self: *Terminal) void {
+    self.moveUp(1);
+}
+fn arrowDown(self: *Terminal) void {
+    self.moveDown(1);
+}
+fn arrowRight(self: *Terminal) void {
+    self.moveRight(1);
+}
+fn arrowLeft(self: *Terminal) void {
+    self.moveLeft(1);
+}
+
+// General keys
+
+fn home(self: *Terminal) void {
+    self.x = 0;
+}
+fn end(self: *Terminal) void {
+    self.x = self.getMaxX(self.y);
+}
+fn delete(self: *Terminal) void {
+    // if we're at the very last character, don't delete
+    self.deleteRight(1) catch return;
+}
+fn insert(self: *Terminal) void {
+    _ = self; // autofix
+}
+fn backspace(self: *Terminal) void {
+    self.deleteLeft(1) catch return;
+}
+fn pgUp(self: *Terminal) void {
+    _ = self; // autofix
+}
+fn pgDown(self: *Terminal) void {
+    _ = self; // autofix
+}
+fn escape(self: *Terminal) void {
+    _ = self; // autofix
+}
+
+// Control keys
+
+fn c_c(self: *Terminal) void {
+    if (self.exitState or !self.pendingChanges) {
+        self.open = false;
+        return;
+    }
+    self.exitState = true;
+}
+fn c_s(self: *Terminal) void {
+    if (self.filepath) |path| {
+        self.saveFile(path) catch return;
+        self.exitState = false;
+        self.pendingChanges = false;
+    }
+}
+fn c_d(self: *Terminal) void {
+    self.moveDown(@intCast(@divFloor(self.height, 2)));
+}
+fn c_u(self: *Terminal) void {
+    self.moveUp(@intCast(@divFloor(self.height, 2)));
+}
+fn c_w(self: *Terminal) void {
+    _ = self; // autofix
+}
+
+// Control Shift keys
+
+fn c_s_d(self: *Terminal) void {
+    self.debugMode = !self.debugMode;
+}
+
+fn noop(self: *Terminal) void {
+    _ = self; // autofix
+}
+
+const Mapping = struct {
+    /// sequence
+    s: []const u8,
+    /// handler
+    h: *const fn (*Terminal) void,
+};
+
+const keymappings = [_]Mapping{
+    .{ .s = "[A", .h = arrowUp },
+    .{ .s = "[B", .h = arrowDown },
+    .{ .s = "[C", .h = arrowRight },
+    .{ .s = "[D", .h = arrowLeft },
+    .{ .s = "[H", .h = home },
+    .{ .s = "[F", .h = end },
+    .{ .s = "[3~", .h = delete },
+    .{ .s = "[24~", .h = insert },
+    .{ .s = "[5~", .h = pgUp },
+    .{ .s = "[6~", .h = pgDown },
+    .{ .s = "", .h = escape },
+    .{ .s = "[100;6u", .h = c_s_d },
+};
+
+fn newline(self: *Terminal) void {
+    self.setChar('\n') catch return;
+}
+
+const ControlMapping = struct {
+    /// keycode
+    c: u32,
+    /// handler
+    h: *const fn (*Terminal) void,
+};
+
+const controlmappings = [_]ControlMapping{
+    .{ .c = 3, .h = c_c },
+    .{ .c = 4, .h = c_d }, // \n C-m
+    .{ .c = 13, .h = newline },
+    .{ .c = 19, .h = c_s },
+    .{ .c = 21, .h = c_u },
+    .{ .c = 23, .h = c_w },
+    .{ .c = 127, .h = backspace },
 };
