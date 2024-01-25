@@ -38,6 +38,7 @@ pub const Terminal = struct {
     banner: bool = false,
     debugMode: bool = false,
     cursorMode: CursorMode = CursorMode.blinkingBar,
+    errorMessage: ?[]const u8 = "Sample error message",
 
     original_termios: ?os.termios = null,
 
@@ -45,12 +46,14 @@ pub const Terminal = struct {
     const xOffset = lineNumberPadding + 2;
 
     const colors = struct {
-        // TODO: involve the background without a massive performance drop
         const bg = "\x1b[48;5;234m";
-        const text = "";
+        const text = "\x1b[97m";
         const offset = "\x1b[38;5;240m";
+        const statusText = "\x1b[38;5;234m"; // textcolor = bg color
+        const status = "\x1b[48;5;214m";
         const zero = "\x1b[0m";
-        const status = "\x1b[1;48;5;214m";
+        const bold = "\x1b[1m";
+        const underline = "\x1b[4m";
     };
 
     /// Initialize a terminal instance.
@@ -134,7 +137,6 @@ pub const Terminal = struct {
         var bw = buf.writer();
 
         try bw.print("\x1b[s", .{}); // save cursor position
-        // try bw.print("\x1b[?25l", .{}); // hide cursor
         try bw.print("\x1b[?47h", .{}); // save screen
         try bw.print("\x1b[?1049h", .{}); // enable alternative buffer
         try buf.flush();
@@ -158,7 +160,6 @@ pub const Terminal = struct {
 
         bw.print("\x1b[?1049l", .{}) catch unreachable; // disable alternative buffer
         bw.print("\x1b[?47l", .{}) catch unreachable; // restore screen
-        bw.print("\x1b[?25h", .{}) catch unreachable; // show cursor
         bw.print("\x1b[{d} q", .{@intFromEnum(CursorMode.blinkingBlock)}) catch unreachable; // set cursor back to blinking block
         bw.print("\x1b[u", .{}) catch unreachable; // restore cursor position
 
@@ -221,12 +222,19 @@ pub const Terminal = struct {
         var buf = std.io.bufferedWriter(stdout);
         var bw = buf.writer();
 
+        try bw.print("{s}", .{colors.bg}); // before erase to fill whole terminal with color
         if (!self.debugMode) {
             try bw.print("\x1b[2J", .{}); // erase screen
+            try bw.print("\x1b[?25l", .{}); // hide cursor to avoid flickering
         }
         try bw.print("\x1b[{d} q", .{@intFromEnum(self.cursorMode)}); // changes how the cursor looks
 
         try self.renderStatusBar(bw);
+        if (self.errorMessage) |msg| {
+            const errMsg = try std.fmt.allocPrint(self.allocator, "Err: {s}", .{msg});
+            defer self.allocator.free(errMsg);
+            try self.renderTextBar(self.height - self.statusLines, errMsg, bw);
+        }
         if (self.banner) {
             try self.renderBanner(bw);
         }
@@ -246,7 +254,13 @@ pub const Terminal = struct {
         try moveCursorBuffered(bw, 0, self.lineStart);
         for (self.content.items[@intCast(self.scrollY)..], 0..) |line, y| {
             if (y > self.height - self.statusLines - 1) break;
-            try bw.print("{s}{d: >4}  \x1b[0m", .{ colors.offset, y + @as(usize, @intCast(self.scrollY)) + 1 }); // grey line number
+            try bw.print("{s}{s}{d: >4}  {s}{s}", .{
+                colors.offset,
+                colors.bg,
+                y + @as(usize, @intCast(self.scrollY)) + 1,
+                colors.zero,
+                colors.bg,
+            }); // grey line number
             for (line.items, 0..) |char, x| {
                 if (x > self.width - 1 - xOffset + self.scrollX) break;
                 if (x < self.scrollX) continue;
@@ -254,9 +268,12 @@ pub const Terminal = struct {
             }
             try bw.print("\n\r", .{});
         }
+        try bw.print("{s}", .{colors.zero});
 
         // move cursor to where cursor should be
         try moveCursorBuffered(bw, self.x + 1 + xOffset - self.scrollX, self.y + 1 - self.scrollY);
+
+        try bw.print("\x1b[?25h", .{}); // show cursor again
 
         try buf.flush();
     }
@@ -264,12 +281,11 @@ pub const Terminal = struct {
     fn renderStatusBar(self: *Self, bw: anytype) !void {
         self.statusLines += 1;
         try moveCursorBuffered(bw, 0, self.height);
-        var spacesToPrint: usize = 25;
+        try bw.print("{s}{s}\x1b[K", .{ colors.status, colors.bold });
         if (self.exitState) {
-            try bw.print("{s}    Tez  |  You have pending changes. 'C-c' to discard & exit", .{colors.status});
-            spacesToPrint = 61;
+            try bw.print("{s}    Tez  |  You have pending changes. 'C-c' to discard & exit", .{colors.statusText});
         } else {
-            try bw.print("{s}    Tez  |  'C-c' to exit", .{colors.status});
+            try bw.print("{s}    Tez  |  'C-c' to exit", .{colors.statusText});
         }
         var rightSize: i32 = 6;
         if (self.x > 0) {
@@ -278,13 +294,15 @@ pub const Terminal = struct {
         if (self.y > 0) {
             rightSize += std.math.log10_int(@as(u32, @intCast(self.y + 1)));
         }
-        // fill bottom line
-        if (spacesToPrint < self.width - rightSize) {
-            for ((spacesToPrint)..@intCast(self.width - rightSize)) |_| {
-                try bw.print(" ", .{});
-            }
-        }
+        try moveCursorBuffered(bw, self.width - rightSize, self.height);
         try bw.print("{}:{}   \x1b[0m", .{ self.y + 1, self.x + 1 });
+    }
+
+    fn renderTextBar(self: *Self, y: i32, text: []const u8, bw: anytype) !void {
+        self.statusLines += 1;
+        try moveCursorBuffered(bw, 0, y);
+        try bw.print("{s}\x1b[K", .{colors.status});
+        try bw.print("{s}    {s}{s}", .{ colors.statusText, text, colors.zero });
     }
 
     fn renderBanner(self: *Self, bw: anytype) !void {
@@ -304,17 +322,20 @@ pub const Terminal = struct {
         const startX = @divFloor(actualWidth - 19, 2);
         if (startY <= 1 or startX <= 1) return;
         try moveCursorBuffered(bw, 0, startY);
+        try bw.print("{s}{s}{s}", .{ colors.text, colors.bg, colors.bold });
         for (banner) |line| {
             for (0..@intCast(startX)) |_| {
                 try bw.print(" ", .{});
             }
             try bw.print("{s}\n\r", .{line});
         }
+        try bw.print("{s}", .{colors.zero});
     }
 
     fn setChar(self: *Self, char: u8) !void {
         self.pendingChanges = true;
         self.banner = false;
+        self.exitState = false;
         switch (char) {
             '\n' => {
                 // at the end of the line
@@ -366,10 +387,11 @@ pub const Terminal = struct {
                 }
             }
             std.debug.print("C_MAPPING = {d}\n\r", .{char});
-        } else if (ascii.isPrint(char)) {
-            try self.setChar(char);
-        } else {
-            std.debug.print("UNKNOWN = {any} | '{s}'", .{ buf[0..size], buf[0..size] });
+        }
+        for (buf[0..size]) |c| {
+            if (ascii.isPrint(c)) {
+                try self.setChar(c);
+            }
         }
     }
 
