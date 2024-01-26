@@ -31,26 +31,43 @@ pub fn GapBuffer(comptime T: type) type {
             self.buffer.deinit();
         }
 
-        /// Inserts `k` gaps and shifts the other elements over by `k`.
+        /// Inserts `k` gaps and shifts the right elements over by `k`.
         /// O(n)
         pub fn grow(self: *Self, k: usize) !void {
-            try self.buffer.appendNTimes(0, k);
-            @memcpy(
-                self.buffer.items[self.front + self.gap .. self.len + self.gap],
-                self.buffer.items[self.front .. self.front + self.gap],
-            );
+            try self.buffer.resize(self.len + self.gap + k);
+
+            // can't use memcpy because src/dest likely overlaps
+            if (self.len - self.front > 0) {
+                var i = self.len + self.gap - 1;
+                while (i >= self.front + self.gap) {
+                    self.buffer.items[i + k] = self.buffer.items[i];
+                    i -= 1;
+                }
+            }
             self.gap += k;
         }
 
         /// O(n), amortized O(1)
         pub fn insert(self: *Self, value: T) !void {
             if (self.gap == 0) {
-                try self.grow(K);
+                try self.grow(growMinSize(self.len, 1));
             }
             self.buffer.items[self.front] = value;
             self.gap -= 1;
             self.front += 1;
             self.len += 1;
+        }
+
+        /// Inserts items into the gap. More efficient than
+        /// individual `insert` calls.
+        pub fn insertSlice(self: *Self, items: []const T) !void {
+            if (self.gap < items.len) {
+                try self.grow(growMinSize(self.len, items.len));
+            }
+            @memcpy(self.buffer.items[self.front .. self.front + items.len], items);
+            self.gap -= items.len;
+            self.front += items.len;
+            self.len += items.len;
         }
 
         pub fn delete(self: *Self) void {
@@ -63,6 +80,17 @@ pub fn GapBuffer(comptime T: type) type {
         pub fn left(self: *Self) void {
             self.buffer.items[self.front + self.gap - 1] = self.buffer.items[self.front - 1];
             self.front -= 1;
+        }
+
+        /// Jumps to a specific index in O(n).
+        pub fn jump(self: *Self, index: usize) void {
+            if (index == self.front) {
+                return;
+            } else if (index < self.front) {
+                for (self.front - index) |_| self.left();
+            } else {
+                for (index - self.front) |_| self.right();
+            }
         }
 
         /// Asserts the gap is non-empty
@@ -84,7 +112,7 @@ pub fn GapBuffer(comptime T: type) type {
         pub fn getOwnedSlice(self: Self) ![]T {
             var slice = try self.allocator.alloc(T, self.len);
             @memcpy(slice[0..self.front], self.buffer.items[0..self.front]);
-            @memcpy(slice[self.front..], self.buffer.items[self.front + self.gap .. self.gap + self.len]);
+            @memcpy(slice[self.front..], self.buffer.items[self.front + self.gap .. self.len + self.gap]);
             return slice;
         }
 
@@ -109,6 +137,18 @@ pub fn GapBuffer(comptime T: type) type {
     };
 }
 
+/// Called when memory growth is necessary. Returns a capacity larger than
+/// minimum that grows super-linearly.
+/// Taken from std.ArrayList.
+fn growMinSize(current: usize, minimum: usize) usize {
+    var new = current;
+    while (true) {
+        new +|= new / 2 + 8;
+        if (new >= minimum)
+            return new;
+    }
+}
+
 test "simple inserts" {
     var gap = GapBuffer(u8).init(testing.allocator);
     defer gap.deinit();
@@ -121,6 +161,42 @@ test "simple inserts" {
     try testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3, 4 }, actual);
     try testing.expectEqual(@as(usize, 4), gap.len);
     try testing.expectEqual(@as(usize, 4), gap.front);
+}
+
+test "slice insert" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("test");
+    const actual = try gap.getOwnedSlice();
+    defer testing.allocator.free(actual);
+    try testing.expectEqualSlices(u8, "test", actual);
+}
+
+test "slice insert move" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("hello");
+    gap.left();
+    gap.left();
+    try gap.insertSlice(" world ");
+    const actual = try gap.getOwnedSlice();
+    defer testing.allocator.free(actual);
+    try testing.expectEqualSlices(u8, "hel world lo", actual);
+}
+
+test "grow" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    const expected = [_]u8{ 1, 2, 3 };
+    try gap.insertSlice(&expected);
+    gap.left();
+    gap.left();
+    gap.left();
+    gap.right();
+    try gap.grow(5);
+    const actual = try gap.getOwnedSlice();
+    defer testing.allocator.free(actual);
+    try testing.expectEqualSlices(u8, &expected, actual);
 }
 
 test "movement" {
@@ -145,6 +221,21 @@ test "movement" {
     gap.right();
     try testing.expectEqual(@as(usize, 5), gap.len);
     try testing.expectEqual(@as(usize, 5), gap.front);
+}
+
+test "jump" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.jump(0);
+    try gap.insertSlice("|54321");
+    gap.jump(6);
+    try gap.insert('|');
+    gap.jump(12);
+    try gap.insert('|');
+    const actual = try gap.getOwnedSlice();
+    defer testing.allocator.free(actual);
+    try testing.expectEqualSlices(u8, "|54321|12345|", actual);
 }
 
 test "insert movement combination" {

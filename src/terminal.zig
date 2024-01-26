@@ -372,17 +372,16 @@ pub const Terminal = struct {
         const char = buf[0];
 
         if (char == 27) { // x1b / escape sequence
-            for (keymappings) |m| {
-                if (std.mem.eql(u8, m.s, buf[1..size])) {
-                    m.h(self);
-                    return;
-                }
+            const func = keymappings.get(buf[1..size]);
+            if (func) |f| {
+                f(self);
+                return;
             }
             std.debug.print("MAPPING = '{s}'\n\r", .{buf[1..]});
         } else if (ascii.isControl(char)) {
             for (controlmappings) |m| {
-                if (m.c == char) {
-                    m.h(self);
+                if (m[0] == char) {
+                    m[1](self);
                     return;
                 }
             }
@@ -608,6 +607,9 @@ fn pgDown(self: *Terminal) void {
 fn escape(self: *Terminal) void {
     _ = self; // autofix
 }
+fn enter(self: *Terminal) void {
+    self.setChar('\n') catch return;
+}
 
 // Control keys
 
@@ -645,45 +647,33 @@ fn noop(self: *Terminal) void {
     _ = self; // autofix
 }
 
-const Mapping = struct {
-    /// sequence
-    s: []const u8,
-    /// handler
-    h: *const fn (*Terminal) void,
-};
+const TerminalCallback = *const fn (*Terminal) void;
+const MapKV = struct { []const u8, TerminalCallback };
+const ControlKV = struct { u32, TerminalCallback };
 
-const keymappings = [_]Mapping{
-    .{ .s = "[A", .h = arrowUp },
-    .{ .s = "[B", .h = arrowDown },
-    .{ .s = "[C", .h = arrowRight },
-    .{ .s = "[D", .h = arrowLeft },
-    .{ .s = "[H", .h = home },
-    .{ .s = "[F", .h = end },
-    .{ .s = "[3~", .h = delete },
-    .{ .s = "[24~", .h = insert },
-    .{ .s = "[5~", .h = pgUp },
-    .{ .s = "[6~", .h = pgDown },
-    .{ .s = "", .h = escape },
-    .{ .s = "[100;6u", .h = c_s_d },
-};
+const keymappings = std.ComptimeStringMap(TerminalCallback, [_]MapKV{
+    .{ "[A", arrowUp },
+    .{ "[B", arrowDown },
+    .{ "[C", arrowRight },
+    .{ "[D", arrowLeft },
+    .{ "[H", home },
+    .{ "[F", end },
+    .{ "[3~", delete },
+    .{ "[24~", insert },
+    .{ "[5~", pgUp },
+    .{ "[6~", pgDown },
+    .{ "", escape },
+    .{ "[100;6u", c_s_d },
+});
 
-fn newline(self: *Terminal) void {
-    self.setChar('\n') catch return;
-}
-
-const ControlMapping = struct {
-    /// keycode
-    c: u32,
-    /// handler
-    h: *const fn (*Terminal) void,
-};
-
-const controlmappings = [_]ControlMapping{
-    .{ .c = 3, .h = c_c },
-    .{ .c = 4, .h = c_d }, // \n C-m
-    .{ .c = 13, .h = newline },
-    .{ .c = 19, .h = c_s },
-    .{ .c = 21, .h = c_u },
-    .{ .c = 23, .h = c_w },
-    .{ .c = 127, .h = backspace },
+// TODO: control key letters simply represent the index in the alphabet
+// a=1, b=2, c=3, etc.
+const controlmappings = [_]ControlKV{
+    .{ 3, c_c },
+    .{ 4, c_d },
+    .{ 13, enter }, // \n C-m
+    .{ 19, c_s },
+    .{ 21, c_u },
+    .{ 23, c_w },
+    .{ 127, backspace },
 };
