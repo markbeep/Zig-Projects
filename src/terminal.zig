@@ -306,7 +306,7 @@ pub const Terminal = struct {
 
     fn insertNewline(self: *Self) !void {
         // at the end of the line
-        const maxX = self.content.items[@intCast(self.y)].items.len;
+        const maxX = try self.getMaxX(self.y);
         self.y += 1;
         if (self.content.items.len <= self.y) {
             try self.content.append(std.ArrayList(u8).init(self.allocator));
@@ -325,12 +325,12 @@ pub const Terminal = struct {
 
     fn insertSlice(self: *Self, chars: []const u8) !void {
         const line = &self.content.items[@intCast(self.y)];
-        if (line.items.len <= self.x) {
+        if (try self.getMaxX(self.y) <= self.x) {
             try line.appendSlice(chars);
         } else {
             try line.insertSlice(@intCast(self.x), chars);
         }
-        self.x += @intCast(chars.len);
+        self.x += @intCast(try unicode.utf8CountCodepoints(chars));
     }
 
     /// Checks the current width and height of the terminal to adjust accordingly
@@ -399,10 +399,19 @@ pub const Terminal = struct {
                 colors.zero,
                 colors.bg,
             }); // grey line number
-            for (line.items, 0..) |char, x| {
+            var iter = (try unicode.Utf8View.init(line.items)).iterator();
+            var x: i32 = 0;
+            while (iter.nextCodepoint()) |cp| : (x += 1) {
                 if (x > self.width - 1 - xOffset + self.scrollX) break;
                 if (x < self.scrollX) continue;
-                try bw.print("{u}", .{char});
+                if (cp == '\x1b') {
+                    try bw.print("{u}", .{unicode.replacement_character});
+                } else {
+                    try bw.print("{u}", .{cp});
+                }
+            }
+            if (self.debugMode) {
+                try bw.print("\t\t| {any}", .{line.items});
             }
             try bw.print("\n\r", .{});
         }
@@ -476,31 +485,31 @@ pub const Terminal = struct {
     //
     // #############################
 
-    pub fn moveUp(self: *Self, times: u32) void {
+    pub fn moveUp(self: *Self, times: u32) !void {
         if (self.y == 0) {
             self.x = 0;
             self.lastX = self.x;
         } else {
             self.y = @max(0, self.y - @as(i32, @intCast(times)));
-            const maxX: i32 = @intCast(self.content.items[@intCast(self.y)].items.len);
+            const maxX: i32 = try self.getMaxX(self.y);
             self.x = @min(self.lastX, maxX);
         }
     }
 
-    pub fn moveDown(self: *Self, times: u32) void {
+    pub fn moveDown(self: *Self, times: u32) !void {
         if (self.y == self.getMaxY()) {
-            self.x = self.getMaxX(self.y);
+            self.x = try self.getMaxX(self.y);
             self.lastX = self.x;
         } else {
             self.y = @min(self.y + @as(i32, @intCast(times)), self.getMaxY());
-            self.x = @min(self.lastX, self.getMaxX(self.y));
+            self.x = @min(self.lastX, try self.getMaxX(self.y));
         }
     }
 
-    pub fn moveRight(self: *Self, times: u32) void {
+    pub fn moveRight(self: *Self, times: u32) !void {
         const maxY: i32 = @intCast(self.content.items.len - 1);
         for (0..times) |_| {
-            const maxX = self.getMaxX(self.y);
+            const maxX = try self.getMaxX(self.y);
             if (self.x == maxX and self.y != maxY) { // go to beginning of next line
                 self.y += 1;
                 self.x = 0;
@@ -511,11 +520,11 @@ pub const Terminal = struct {
         }
     }
 
-    pub fn moveLeft(self: *Self, times: u32) void {
+    pub fn moveLeft(self: *Self, times: u32) !void {
         for (0..times) |_| {
             if (self.x == 0 and self.y != 0) { // go to end of previous line
                 self.y -= 1;
-                self.x = self.getMaxX(self.y);
+                self.x = try self.getMaxX(self.y);
             } else {
                 self.x = @max(0, self.x - 1);
             }
@@ -534,19 +543,30 @@ pub const Terminal = struct {
                 }
                 if (self.x == 0) {
                     var previousLine = &self.content.items[@intCast(self.y - 1)];
-                    self.x = @intCast(previousLine.items.len);
+                    self.x = try self.getMaxX(self.y - 1);
                     try previousLine.appendSlice(line.items);
                 } else {
                     // go to end of line before
-                    self.x = self.getMaxX(self.y);
+                    self.x = try self.getMaxX(self.y);
                 }
                 // delete line
                 line.deinit();
                 _ = self.content.orderedRemove(@intCast(self.y));
                 self.y -= 1;
             } else {
-                // delete char we're on
-                _ = line.orderedRemove(@intCast(self.x - 1));
+                // TODO: this is inefficient. make this more efficient
+                // compute the u8 indices we want to delete
+                var arrayPosition: usize = 0;
+                var iter = (try unicode.Utf8View.init(line.items)).iterator();
+                var i: usize = 0;
+                while (iter.nextCodepointSlice()) |s| : (i += 1) {
+                    if (i >= @as(usize, (@intCast(self.x - 1)))) break;
+                    arrayPosition += s.len;
+                }
+                const len = try unicode.utf8ByteSequenceLength(line.items[arrayPosition]);
+                for (0..len) |_| {
+                    _ = line.orderedRemove(@intCast(self.x - 1));
+                }
                 self.x -= 1;
             }
         }
@@ -554,8 +574,8 @@ pub const Terminal = struct {
 
     pub fn deleteRight(self: *Self, times: u32) !void {
         for (0..times) |_| {
-            if (self.y != self.getMaxY() or self.x != self.getMaxX(self.y)) {
-                self.moveRight(1);
+            if (self.y != self.getMaxY() or self.x != try self.getMaxX(self.y)) {
+                try self.moveRight(1);
                 try self.deleteLeft(1);
             }
         }
@@ -565,8 +585,8 @@ pub const Terminal = struct {
         return @intCast(self.content.items.len - 1);
     }
 
-    pub fn getMaxX(self: *Self, y: i32) i32 {
-        return @intCast(self.content.items[@intCast(y)].items.len);
+    pub fn getMaxX(self: *Self, y: i32) !i32 {
+        return @intCast(try unicode.utf8CountCodepoints(self.content.items[@intCast(y)].items));
     }
 
     pub fn openFile(self: *Self, path: []const u8) !void {
@@ -631,16 +651,16 @@ pub const Terminal = struct {
 // Arrows
 
 fn arrowUp(self: *Terminal) void {
-    self.moveUp(1);
+    self.moveUp(1) catch {};
 }
 fn arrowDown(self: *Terminal) void {
-    self.moveDown(1);
+    self.moveDown(1) catch {};
 }
 fn arrowRight(self: *Terminal) void {
-    self.moveRight(1);
+    self.moveRight(1) catch {};
 }
 fn arrowLeft(self: *Terminal) void {
-    self.moveLeft(1);
+    self.moveLeft(1) catch {};
 }
 
 // General keys
@@ -649,7 +669,7 @@ fn home(self: *Terminal) void {
     self.x = 0;
 }
 fn end(self: *Terminal) void {
-    self.x = self.getMaxX(self.y);
+    self.x = self.getMaxX(self.y) catch 0;
 }
 fn delete(self: *Terminal) void {
     // if we're at the very last character, don't delete
@@ -691,10 +711,10 @@ fn c_s(self: *Terminal) void {
     }
 }
 fn c_d(self: *Terminal) void {
-    self.moveDown(@intCast(@divFloor(self.height, 2)));
+    self.moveDown(@intCast(@divFloor(self.height, 2))) catch {};
 }
 fn c_u(self: *Terminal) void {
-    self.moveUp(@intCast(@divFloor(self.height, 2)));
+    self.moveUp(@intCast(@divFloor(self.height, 2))) catch {};
 }
 fn c_w(self: *Terminal) void {
     _ = self; // autofix
