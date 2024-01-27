@@ -3,7 +3,7 @@ const os = std.os;
 const ascii = std.ascii;
 const unicode = std.unicode;
 
-const TEZ_VERSION = "0.0.3";
+const TEZ_VERSION = "0.1.0";
 
 const TerminalError = error{ TerminalNotSetup, IoctlFailed };
 
@@ -99,7 +99,7 @@ pub const Terminal = struct {
     banner: bool = false,
     debugMode: bool = false,
     cursorMode: CursorMode = CursorMode.blinkingBar,
-    errorMessage: ?[]const u8 = "Sample error message",
+    errorMessage: ?[]const u8 = null,
 
     original_termios: ?os.termios = null,
 
