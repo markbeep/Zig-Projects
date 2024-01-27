@@ -21,9 +21,9 @@ pub fn GapBuffer(comptime T: type) type {
             };
         }
 
-        pub fn initCapacity(allocator: std.mem.Allocator, num: usize) Self {
+        pub fn initCapacity(allocator: std.mem.Allocator, num: usize) std.mem.Allocator.Error!Self {
             return Self{
-                .buffer = ArrayList(T).initCapacity(allocator, num),
+                .buffer = try ArrayList(T).initCapacity(allocator, num),
                 .allocator = allocator,
             };
         }
@@ -310,6 +310,17 @@ test "simple inserts" {
     try testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3, 4 }, actual);
     try testing.expectEqual(@as(usize, 4), gap.len);
     try testing.expectEqual(@as(usize, 4), gap.front);
+}
+
+test "2d inserts" {
+    var gap = GapBuffer(*GapBuffer(u8)).init(testing.allocator);
+    defer gap.deinit();
+    var s = GapBuffer(u8).init(testing.allocator);
+    try gap.insert(&s);
+    defer s.deinit();
+    try gap.get(0).insert(1);
+    try testing.expectEqual(@as(usize, 1), gap.len);
+    try testing.expectEqual(@as(usize, 1), s.len);
 }
 
 test "slice insert" {

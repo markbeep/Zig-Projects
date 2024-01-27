@@ -29,6 +29,16 @@ pub fn build(b: *std.Build) void {
     // // running `zig build`).
     b.installArtifact(lib);
 
+    const old_terminal_lib = b.addStaticLibrary(.{
+        .name = "Tez",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_source_file = .{ .path = "src/old_terminal.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(old_terminal_lib);
+
     const exe = b.addExecutable(.{
         .name = "Tez",
         .root_source_file = .{ .path = "src/main.zig" },

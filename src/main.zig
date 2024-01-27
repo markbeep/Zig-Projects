@@ -1,6 +1,6 @@
 const std = @import("std");
 const os = std.os;
-const t = @import("terminal.zig");
+const t = @import("old_terminal.zig");
 
 var term: ?t.Terminal = null;
 
