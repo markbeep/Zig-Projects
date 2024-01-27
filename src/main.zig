@@ -4,13 +4,9 @@ const t = @import("terminal.zig");
 
 var term: ?t.Terminal = null;
 
-fn handleSigInt(_: c_int) callconv(.C) void {
-    term.?.open = false;
-}
-
 fn handleSigWinch(_: c_int) callconv(.C) void {
-    term.?.checkTerminalSize() catch unreachable;
-    term.?.render() catch unreachable;
+    term.?.checkTerminalSize() catch {};
+    term.?.render() catch {};
 }
 
 pub fn main() !void {
@@ -21,12 +17,6 @@ pub fn main() !void {
     defer term.?.deinit();
     try term.?.setupTerminal();
     defer term.?.restoreTerminal();
-
-    try os.sigaction(os.SIG.INT, &os.Sigaction{
-        .handler = .{ .handler = handleSigInt },
-        .mask = os.empty_sigset,
-        .flags = 0,
-    }, null);
 
     try os.sigaction(os.SIG.WINCH, &os.Sigaction{
         .handler = .{ .handler = handleSigWinch },

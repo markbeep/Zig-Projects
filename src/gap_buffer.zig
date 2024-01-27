@@ -39,9 +39,8 @@ pub fn GapBuffer(comptime T: type) type {
             // can't use memcpy because src/dest likely overlaps
             if (self.len - self.front > 0) {
                 var i = self.len + self.gap - 1;
-                while (i >= self.front + self.gap) {
+                while (i >= self.front + self.gap) : (i -= 1) {
                     self.buffer.items[i + k] = self.buffer.items[i];
-                    i -= 1;
                 }
             }
             self.gap += k;
@@ -290,8 +289,7 @@ test "iterator" {
     var iterator = gap.iterator();
     const expect = [_]u8{ 1, 2, 3, 4 };
     var i: u8 = 0;
-    while (iterator.next()) |elem| {
+    while (iterator.next()) |elem| : (i += 1) {
         try std.testing.expectEqual(expect[i], elem);
-        i += 1;
     }
 }

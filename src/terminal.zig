@@ -1,10 +1,71 @@
-const TEZ_VERSION = "v0.0.3";
-
 const std = @import("std");
 const os = std.os;
 const ascii = std.ascii;
+const unicode = std.unicode;
+
+const TEZ_VERSION = "0.0.3";
 
 const TerminalError = error{ TerminalNotSetup, IoctlFailed };
+
+const TerminalCallback = *const fn (*Terminal) void;
+const MapKV = struct { []const u8, TerminalCallback };
+const ControlKV = struct { u32, TerminalCallback };
+
+/// Type of cursor to use.
+///
+/// More information: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h4-Functions-using-CSI-_-ordered-by-the-final-character-lparen-s-rparen:CSI-Ps-SP-q.1D81
+const CursorMode = enum(u4) {
+    blinkingBlock = 1,
+    steadyBlock = 2,
+    blinkingUnderline = 3,
+    steadyUnderline = 4,
+    blinkingBar = 5,
+    steadyBar = 6,
+};
+
+const keymappings = std.ComptimeStringMap(TerminalCallback, [_]MapKV{
+    .{ "[A", arrowUp },
+    .{ "[B", arrowDown },
+    .{ "[C", arrowRight },
+    .{ "[D", arrowLeft },
+    .{ "[H", home },
+    .{ "[F", end },
+    .{ "[3~", delete },
+    .{ "[24~", insert },
+    .{ "[5~", pgUp },
+    .{ "[6~", pgDown },
+    .{ "", escape },
+    .{ "[100;6u", c_s_d },
+
+    // control keys
+    .{ "a", noop },
+    .{ "b", noop },
+    .{ "c", c_c },
+    .{ "d", c_d },
+    .{ "e", noop },
+    .{ "f", noop },
+    .{ "g", noop },
+    .{ "h", noop },
+    .{ "i", noop },
+    .{ "j", noop },
+    .{ "k", noop },
+    .{ "l", noop },
+    .{ "m", enter }, // equal to 'enter'
+    .{ "n", noop },
+    .{ "o", noop },
+    .{ "p", noop },
+    .{ "q", noop },
+    .{ "r", noop },
+    .{ "s", c_s },
+    .{ "t", noop },
+    .{ "u", c_u },
+    .{ "v", noop },
+    .{ "w", c_w },
+    .{ "x", noop },
+    .{ "y", noop },
+    .{ "z", noop },
+    .{ "\x7f", backspace }, // equal to '127'
+});
 
 pub const Terminal = struct {
     const Self = @This();
@@ -86,6 +147,19 @@ pub const Terminal = struct {
 
         term.open = true;
         return term;
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.filepath) |path| {
+            self.allocator.free(path);
+        }
+
+        for (self.content.items) |item| {
+            item.deinit();
+        }
+        self.content.deinit();
+
+        self.open = false;
     }
 
     pub fn setupTerminal(self: *Self) !void {
@@ -182,17 +256,81 @@ pub const Terminal = struct {
         }
     }
 
-    pub fn deinit(self: *Self) void {
-        if (self.filepath) |path| {
-            self.allocator.free(path);
+    pub fn handleInput(self: *Self, buf: [8]u8, size: usize) !void {
+        const char = buf[0];
+
+        var func: ?TerminalCallback = null;
+        if (char == 0x1b) { // escape sequence
+            func = keymappings.get(buf[1..size]);
+        } else if (ascii.isControl(char)) {
+            if (char == 127) {
+                func = keymappings.get(buf[0..1]);
+            } else {
+                const asciiChar = [1]u8{buf[0] + 96};
+                func = keymappings.get(&asciiChar);
+            }
+        }
+        if (func) |f| {
+            f(self);
+            return;
+        }
+        if (self.debugMode) {
+            std.debug.print("MAPPING = '{s}' | {any}\n\r", .{ buf[0..size], buf[0..size] });
         }
 
-        for (self.content.items) |item| {
-            item.deinit();
-        }
-        self.content.deinit();
+        try self.setChars(buf[0..size]);
+    }
 
-        self.open = false;
+    fn setChars(self: *Self, chars: []const u8) !void {
+        self.pendingChanges = true;
+        self.banner = false;
+        self.exitState = false;
+
+        // buffered inserts. insert up to a newline character
+        // Allows for more efficient insertions of multiple characters (like pasting)
+        var start: usize = 0;
+        for (chars, 0..) |c, i| {
+            if (c == '\n') {
+                if (start < i) {
+                    try self.insertSlice(chars[start..i]);
+                }
+                try self.insertNewline();
+                start = i + 1;
+            }
+        }
+        if (start < chars.len) {
+            try self.insertSlice(chars[start..]);
+        }
+        self.lastX = self.x;
+    }
+
+    fn insertNewline(self: *Self) !void {
+        // at the end of the line
+        const maxX = self.content.items[@intCast(self.y)].items.len;
+        self.y += 1;
+        if (self.content.items.len <= self.y) {
+            try self.content.append(std.ArrayList(u8).init(self.allocator));
+        } else {
+            try self.content.insert(@intCast(self.y), std.ArrayList(u8).init(self.allocator));
+        }
+        if (self.x != maxX) { // prepend line content to next line
+            const newLine = &self.content.items[@intCast(self.y)];
+            const line = &self.content.items[@intCast(self.y - 1)];
+            const slice = line.items[@intCast(self.x)..];
+            try newLine.insertSlice(0, slice);
+            try line.resize(@intCast(self.x));
+        }
+        self.x = 0;
+    }
+
+    fn insertSlice(self: *Self, chars: []const u8) !void {
+        const line = &self.content.items[@intCast(self.y)];
+        if (line.items.len <= self.x) {
+            try line.appendSlice(chars);
+        } else {
+            try line.insertSlice(@intCast(self.x), chars);
+        }
+        self.x += @intCast(chars.len);
     }
 
     /// Checks the current width and height of the terminal to adjust accordingly
@@ -316,7 +454,7 @@ pub const Terminal = struct {
             "      | |  __// /",
             "      |_|\\___/___|",
             " Lightweight text editor",
-            "         " ++ TEZ_VERSION,
+            "         v" ++ TEZ_VERSION,
         };
         const startY = @divFloor(actualHeight - @as(i32, @intCast(banner.len)), 2);
         const startX = @divFloor(actualWidth - 19, 2);
@@ -330,68 +468,6 @@ pub const Terminal = struct {
             try bw.print("{s}\n\r", .{line});
         }
         try bw.print("{s}", .{colors.zero});
-    }
-
-    fn setChar(self: *Self, char: u8) !void {
-        self.pendingChanges = true;
-        self.banner = false;
-        self.exitState = false;
-        switch (char) {
-            '\n' => {
-                // at the end of the line
-                const maxX = self.content.items[@intCast(self.y)].items.len;
-                self.y += 1;
-                if (self.content.items.len <= self.y) {
-                    try self.content.append(std.ArrayList(u8).init(self.allocator));
-                } else {
-                    try self.content.insert(@intCast(self.y), std.ArrayList(u8).init(self.allocator));
-                }
-                if (self.x != maxX) { // prepend line content to next line
-                    const newLine = &self.content.items[@intCast(self.y)];
-                    const line = &self.content.items[@intCast(self.y - 1)];
-                    const slice = line.items[@intCast(self.x)..];
-                    try newLine.insertSlice(0, slice);
-                    try line.resize(@intCast(self.x));
-                }
-                self.x = 0;
-            },
-            else => {
-                const line = &self.content.items[@intCast(self.y)];
-                if (line.items.len <= self.x) {
-                    try line.append(char);
-                } else {
-                    try line.insert(@intCast(self.x), char);
-                }
-                self.x += 1;
-            },
-        }
-        self.lastX = self.x;
-    }
-
-    pub fn handleInput(self: *Self, buf: [8]u8, size: usize) !void {
-        const char = buf[0];
-
-        if (char == 27) { // x1b / escape sequence
-            const func = keymappings.get(buf[1..size]);
-            if (func) |f| {
-                f(self);
-                return;
-            }
-            std.debug.print("MAPPING = '{s}'\n\r", .{buf[1..]});
-        } else if (ascii.isControl(char)) {
-            for (controlmappings) |m| {
-                if (m[0] == char) {
-                    m[1](self);
-                    return;
-                }
-            }
-            std.debug.print("C_MAPPING = {d}\n\r", .{char});
-        }
-        for (buf[0..size]) |c| {
-            if (ascii.isPrint(c)) {
-                try self.setChar(c);
-            }
-        }
     }
 
     // #############################
@@ -453,7 +529,7 @@ pub const Terminal = struct {
         for (0..times) |_| {
             var line = &self.content.items[@intCast(self.y)];
             if (line.items.len == 0 or self.x == 0) {
-                if (self.content.items.len == 1) {
+                if (self.y == 0) {
                     return;
                 }
                 if (self.x == 0) {
@@ -518,12 +594,11 @@ pub const Terminal = struct {
         // TODO: only read the lines which we can see on the screen
         // max line size of 2KBs
         var lineno: u32 = 0;
-        while (try in_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 2 << 10)) |line| {
+        while (try in_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 2 << 10)) |line| : (lineno += 1) {
             defer self.allocator.free(line);
             if (lineno > 0) {
                 try self.content.append(std.ArrayList(u8).init(self.allocator));
             }
-            lineno += 1;
             var list = &self.content.items[self.content.items.len - 1];
             try list.appendSlice(line);
         }
@@ -551,18 +626,6 @@ pub const Terminal = struct {
         }
         try buf_writer.flush();
     }
-};
-
-/// Type of cursor to use.
-///
-/// More information: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h4-Functions-using-CSI-_-ordered-by-the-final-character-lparen-s-rparen:CSI-Ps-SP-q.1D81
-const CursorMode = enum(u4) {
-    blinkingBlock = 1,
-    steadyBlock = 2,
-    blinkingUnderline = 3,
-    steadyUnderline = 4,
-    blinkingBar = 5,
-    steadyBar = 6,
 };
 
 // Arrows
@@ -605,10 +668,10 @@ fn pgDown(self: *Terminal) void {
     _ = self; // autofix
 }
 fn escape(self: *Terminal) void {
-    _ = self; // autofix
+    self.exitState = false;
 }
 fn enter(self: *Terminal) void {
-    self.setChar('\n') catch return;
+    self.setChars("\n") catch return;
 }
 
 // Control keys
@@ -643,37 +706,4 @@ fn c_s_d(self: *Terminal) void {
     self.debugMode = !self.debugMode;
 }
 
-fn noop(self: *Terminal) void {
-    _ = self; // autofix
-}
-
-const TerminalCallback = *const fn (*Terminal) void;
-const MapKV = struct { []const u8, TerminalCallback };
-const ControlKV = struct { u32, TerminalCallback };
-
-const keymappings = std.ComptimeStringMap(TerminalCallback, [_]MapKV{
-    .{ "[A", arrowUp },
-    .{ "[B", arrowDown },
-    .{ "[C", arrowRight },
-    .{ "[D", arrowLeft },
-    .{ "[H", home },
-    .{ "[F", end },
-    .{ "[3~", delete },
-    .{ "[24~", insert },
-    .{ "[5~", pgUp },
-    .{ "[6~", pgDown },
-    .{ "", escape },
-    .{ "[100;6u", c_s_d },
-});
-
-// TODO: control key letters simply represent the index in the alphabet
-// a=1, b=2, c=3, etc.
-const controlmappings = [_]ControlKV{
-    .{ 3, c_c },
-    .{ 4, c_d },
-    .{ 13, enter }, // \n C-m
-    .{ 19, c_s },
-    .{ 21, c_u },
-    .{ 23, c_w },
-    .{ 127, backspace },
-};
+fn noop(_: *Terminal) void {}
