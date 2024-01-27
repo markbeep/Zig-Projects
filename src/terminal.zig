@@ -3,7 +3,7 @@ const os = std.os;
 const ascii = std.ascii;
 const unicode = std.unicode;
 
-const TEZ_VERSION = "0.0.3";
+const TEZ_VERSION = "0.1.0";
 
 const TerminalError = error{ TerminalNotSetup, IoctlFailed };
 
