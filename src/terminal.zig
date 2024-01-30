@@ -2,6 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const GapBuffer = @import("gap_buffer.zig").GapBuffer;
 const Allocator = std.mem.Allocator;
+const unicode = std.unicode;
+const assert = std.debug.assert;
 
 /// Type of cursor to use.
 ///
@@ -15,7 +17,7 @@ const CursorMode = enum(u4) {
     steadyBar = 6,
 };
 
-const Mode = enum(u2) {
+const EditMode = enum(u2) {
     normal,
     insert,
     visual,
@@ -27,16 +29,20 @@ const TerminalOptions = struct {
 
 pub const Terminal = struct {
     const Self = @This();
+    const tabIndentation = 4;
+    const lineInitialCapacity = 10;
 
-    x: usize = 0,
     y: usize = 0,
+    x: usize = 0,
+    byteX: usize = 0,
     content: GapBuffer(GapBuffer(u8)),
     allocator: Allocator,
     options: ?TerminalOptions,
+    mode: EditMode = EditMode.normal,
 
     pub fn init(allocator: std.mem.Allocator, options: ?TerminalOptions) Allocator.Error!Self {
         var buffer = try GapBuffer(GapBuffer(u8)).initCapacity(allocator, 1000);
-        const line = try GapBuffer(u8).initCapacity(allocator, 10);
+        const line = try GapBuffer(u8).initCapacity(allocator, lineInitialCapacity);
         try buffer.insert(line);
         return Self{
             .content = buffer,
@@ -52,6 +58,80 @@ pub const Terminal = struct {
         }
         self.content.deinit();
     }
+
+    fn jump(self: *Self, y: usize, x: usize) !void {
+        self.content.jump(y + 1);
+        var line = self.content.getLeft();
+        line.jump(x);
+        self.y = y;
+        self.x = x;
+
+        // TODO: figure out how to properly handle character indices
+        // correct the byte x-coordinate
+        self.byteX = 0;
+        if (line.len > 0) {
+            const owned = try line.getOwnedSlice();
+            defer self.allocator.free(owned);
+            var iter = (try unicode.Utf8View.init(owned)).iterator();
+            var i: usize = 0;
+            while (iter.nextCodepointSlice()) |ch| : (i += 1) {
+                if (i >= self.x) break;
+                self.byteX += ch.len;
+            }
+        }
+    }
+
+    /// Inserts a slice of characters at the current cursor position.
+    /// Does not handle different character types. `addChars` should
+    /// be used for that.
+    fn insertSlice(self: *Self, chars: []const u8) !void {
+        try self.content.get(self.y).insertSlice(chars);
+        self.x += try unicode.utf8CountCodepoints(chars);
+        self.byteX += chars.len;
+    }
+
+    fn insertNewline(self: *Self) !void {
+        const oldLineLength = self.content.getLeft().len;
+        try self.content.insert(try GapBuffer(u8).initCapacity(self.allocator, lineInitialCapacity));
+        if (self.byteX < oldLineLength) {
+            const newLine = self.content.getLeft();
+            const oldLine = self.content.get(self.y);
+            try newLine.insertSlice(oldLine.buffer.items[self.byteX..oldLineLength]);
+            oldLine.deleteAllRight();
+        }
+        self.y += 1;
+        self.x = 0;
+        self.byteX = 0;
+    }
+
+    /// Takes an unfiltered input of characters and inserts them at
+    /// the current cursor position. Handles special characters like
+    /// newlines and tabs.
+    fn addChars(self: *Self, chars: []const u8) !void {
+        var start: usize = 0;
+        for (chars, 0..) |c, i| {
+            switch (c) {
+                '\n' => {
+                    if (start < i) {
+                        try self.insertSlice(chars[start..i]);
+                    }
+                    try self.insertNewline();
+                    start = i + 1;
+                },
+                '\t' => {
+                    if (start < i) {
+                        try self.insertSlice(chars[start..i]);
+                    }
+                    try self.insertSlice(" " ** tabIndentation);
+                    start = i + 1;
+                },
+                else => {},
+            }
+        }
+        if (start < chars.len) {
+            try self.insertSlice(chars[start..]);
+        }
+    }
 };
 
 test "init" {
@@ -66,4 +146,126 @@ test "init" {
 test "init with failing allocator" {
     const terminal = Terminal.init(testing.failing_allocator, null);
     try testing.expectError(std.mem.Allocator.Error.OutOfMemory, terminal);
+}
+
+test "jump" {
+    {
+        var term = try Terminal.init(testing.allocator, null);
+        defer term.deinit();
+        try term.jump(0, 0);
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 0), term.x);
+    }
+    {
+        var term = try Terminal.init(testing.allocator, null);
+        defer term.deinit();
+        try term.addChars("hello\nthere\ngeneral\nkenobi");
+        try term.jump(3, 4);
+        try testing.expectEqual(@as(usize, 3), term.y);
+        try testing.expectEqual(@as(usize, 4), term.x);
+        const line = term.content.getLeft().*;
+        try testing.expectEqual(@as(u8, 'o'), line.getLeft().*);
+        try testing.expectEqual(@as(u8, 'b'), line.getRight().*);
+    }
+}
+
+test "insertSlice" {
+    const a = testing.allocator;
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.insertSlice("asdf");
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 4), term.x);
+        try testing.expectEqual(@as(usize, 4), term.byteX);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.insertSlice("äüＳ");
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 3), term.x);
+        try testing.expectEqual(@as(usize, 7), term.byteX);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.insertSlice("2345");
+        try term.jump(0, 0);
+        try term.insertSlice("01");
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 2), term.x);
+        try testing.expectEqual(@as(usize, 2), term.byteX);
+        const line = try term.content.get(0).getOwnedSlice();
+        defer a.free(line);
+        try testing.expectEqualSlices(u8, "012345", line);
+    }
+}
+
+test "insertNewline" {
+    const a = testing.allocator;
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.insertSlice("a");
+        try term.insertNewline();
+        try testing.expectEqual(@as(usize, 1), term.y);
+        try testing.expectEqual(@as(usize, 0), term.x);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.insertSlice("abcd");
+        try term.jump(0, 2);
+        try term.insertNewline();
+        try testing.expectEqual(@as(usize, 2), term.content.len);
+        const firstLine = try term.content.get(0).getOwnedSlice();
+        defer a.free(firstLine);
+        const secondLine = try term.content.get(1).getOwnedSlice();
+        defer a.free(secondLine);
+        try testing.expectEqual(@as(usize, 1), term.y);
+        try testing.expectEqual(@as(usize, 0), term.x);
+        try testing.expectEqualSlices(u8, "ab", firstLine);
+        try testing.expectEqualSlices(u8, "cd", secondLine);
+    }
+}
+
+test "addChars" {
+    const a = testing.allocator;
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.addChars("hello");
+        const owned = try term.content.get(0).getOwnedSlice();
+        defer a.free(owned);
+        try testing.expectEqual(@as(usize, 1), term.content.len);
+        try testing.expectEqual(@as(usize, 5), owned.len);
+        try testing.expectEqualSlices(u8, "hello", owned);
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 5), term.x);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.addChars("Hello there\nGeneral Kenobi");
+        const firstLine = try term.content.get(0).getOwnedSlice();
+        const secondLine = try term.content.get(1).getOwnedSlice();
+        defer a.free(firstLine);
+        defer a.free(secondLine);
+        try testing.expectEqual(@as(usize, 2), term.content.len);
+        try testing.expectEqual(@as(usize, 11), firstLine.len);
+        try testing.expectEqual(@as(usize, 14), secondLine.len);
+        try testing.expectEqualSlices(u8, "Hello there", firstLine);
+        try testing.expectEqualSlices(u8, "General Kenobi", secondLine);
+        try testing.expectEqual(@as(usize, 1), term.y);
+        try testing.expectEqual(@as(usize, 14), term.x);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.addChars("\tdef foo()");
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 9 + Terminal.tabIndentation), term.x);
+        try testing.expectEqual(@as(usize, 9 + Terminal.tabIndentation), term.byteX);
+    }
 }

@@ -48,6 +48,7 @@ pub fn GapBuffer(comptime T: type) type {
         }
 
         /// O(n), amortized O(1)
+        /// May invalidate pointers.
         pub fn insert(self: *Self, value: T) !void {
             if (self.gap == 0) {
                 try self.grow(growMinSize(self.len, 1));
@@ -61,6 +62,7 @@ pub fn GapBuffer(comptime T: type) type {
         /// Inserts items into the gap. More efficient than
         /// individual `insert` calls.
         pub fn insertSlice(self: *Self, items: []const T) !void {
+            assert(items.len > 0);
             if (self.gap < items.len) {
                 try self.grow(growMinSize(self.len, items.len));
             }
@@ -86,6 +88,13 @@ pub fn GapBuffer(comptime T: type) type {
             self.len -= num;
         }
 
+        /// Deletes all elements to the left of the buffer
+        pub fn deleteAllLeft(self: *Self) void {
+            self.gap += self.front;
+            self.len -= self.front;
+            self.front = 0;
+        }
+
         /// Deletes one element to the right of the gap
         pub fn deleteRight(self: *Self) void {
             assert(self.len - self.front > 0);
@@ -98,6 +107,13 @@ pub fn GapBuffer(comptime T: type) type {
             assert(self.len - self.front >= num);
             self.gap += num;
             self.len -= num;
+        }
+
+        /// Deletes all elements to the right of the buffer
+        pub fn deleteAllRight(self: *Self) void {
+            const end = self.len - self.front;
+            self.gap += end;
+            self.len -= end;
         }
 
         /// Moves the gap to the left by one.
@@ -117,6 +133,8 @@ pub fn GapBuffer(comptime T: type) type {
         }
 
         /// Moves the gap to a specific index in O(n).
+        /// Legal index is an element of the inclusive
+        /// range [0, n].
         pub fn jump(self: *Self, index: usize) void {
             assert(index <= self.len);
             if (index == self.front) {
@@ -138,11 +156,22 @@ pub fn GapBuffer(comptime T: type) type {
             return &self.buffer.items[index];
         }
 
+        /// Gets the first element to the left of the gap
+        pub fn getLeft(self: Self) *T {
+            assert(self.front > 0);
+            return &self.buffer.items[self.front - 1];
+        }
+
+        /// Gets the first element to the right of the gap
+        pub fn getRight(self: Self) *T {
+            assert(self.len - self.front > 0);
+            return &self.buffer.items[self.front + self.gap];
+        }
+
         /// Copies the buffer into a new slice without any gaps.
-        /// The caller owns the returned memory.
-        /// Asserts a non-empty buffer.
+        /// The caller owns the returned memory. Should not be freed
+        /// on an empty slice.
         pub fn getOwnedSlice(self: Self) ![]T {
-            assert(self.len > 0);
             var slice = try self.allocator.alloc(T, self.len);
             @memcpy(slice[0..self.front], self.buffer.items[0..self.front]);
             @memcpy(slice[self.front..], self.buffer.items[self.front + self.gap .. self.len + self.gap]);
@@ -298,6 +327,17 @@ test "deleteMany" {
     try testing.expect(gap.gap > 0);
 }
 
+test "deleteAllLeft" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.left();
+    gap.deleteAllLeft();
+    try testing.expectEqual(@as(usize, 1), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
 test "deleteRight" {
     var gap = GapBuffer(u8).init(testing.allocator);
     defer gap.deinit();
@@ -317,6 +357,17 @@ test "deleteManyRight" {
     gap.deleteManyRight(5);
     try testing.expectEqual(@as(usize, 0), gap.len);
     try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "deleteAllRight" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.jump(2);
+    gap.deleteAllRight();
+    try testing.expectEqual(@as(usize, 2), gap.len);
+    try testing.expectEqual(@as(usize, 2), gap.front);
     try testing.expect(gap.gap > 0);
 }
 
@@ -443,22 +494,38 @@ test "delete complex" {
 }
 
 test "get" {
-    var gap = GapBuffer(u8).init(testing.allocator);
-    defer gap.deinit();
-    try gap.insertSlice("12345");
-    gap.left();
-    try testing.expectEqual(@as(usize, '1'), gap.get(0).*);
-    try testing.expectEqual(@as(usize, '5'), gap.get(4).*);
+    {
+        var gap = GapBuffer(u8).init(testing.allocator);
+        defer gap.deinit();
+        try gap.insertSlice("12345");
+        gap.left();
+        try testing.expectEqual(@as(usize, '1'), gap.get(0).*);
+        try testing.expectEqual(@as(usize, '5'), gap.get(4).*);
+    }
+    {
+        var gap = GapBuffer(u8).init(testing.allocator);
+        defer gap.deinit();
+        try gap.insert(1);
+        try gap.insert(2);
+        gap.left();
+        try testing.expectEqual(@as(u8, 1), gap.get(0).*);
+        try testing.expectEqual(@as(u8, 2), gap.get(1).*);
+    }
 }
 
-test "get complex" {
-    var gap = GapBuffer(u8).init(testing.allocator);
+test "getLeft" {
+    var gap = GapBuffer(i32).init(testing.allocator);
     defer gap.deinit();
-    try gap.insert(1);
-    try gap.insert(2);
+    try gap.insert(600);
+    try testing.expectEqual(@as(i32, 600), gap.getLeft().*);
+}
+
+test "getRight" {
+    var gap = GapBuffer(i32).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insert(600);
     gap.left();
-    try testing.expectEqual(@as(u8, 1), gap.get(0).*);
-    try testing.expectEqual(@as(u8, 2), gap.get(1).*);
+    try testing.expectEqual(@as(i32, 600), gap.getRight().*);
 }
 
 test "getOwnedSlice" {
