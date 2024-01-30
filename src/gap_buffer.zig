@@ -28,7 +28,7 @@ pub fn GapBuffer(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: Self) void {
             self.buffer.deinit();
         }
 
@@ -45,21 +45,6 @@ pub fn GapBuffer(comptime T: type) type {
                 }
             }
             self.gap += k;
-        }
-
-        test "grow" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.grow(50);
-            try gap.insertSlice("12345");
-            gap.jump(2);
-            try gap.grow(5);
-            try std.testing.expectEqual(@as(usize, 5), gap.len);
-            try std.testing.expectEqual(@as(usize, 50), gap.gap);
-            try std.testing.expectEqual(@as(usize, 2), gap.front);
-            const actual = try gap.getOwnedSlice();
-            defer testing.allocator.free(actual);
-            try testing.expectEqualSlices(u8, "12345", actual);
         }
 
         /// O(n), amortized O(1)
@@ -93,32 +78,12 @@ pub fn GapBuffer(comptime T: type) type {
             self.len -= 1;
         }
 
-        test "delete" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insert(5);
-            gap.delete();
-            try testing.expectEqual(@as(usize, 0), gap.len);
-            try testing.expectEqual(@as(usize, 0), gap.front);
-            try testing.expect(gap.gap > 0);
-        }
-
         /// Deletes multiple elements to the left of the gap
         pub fn deleteMany(self: *Self, num: usize) void {
             assert(self.front >= num);
             self.gap += num;
             self.front -= num;
             self.len -= num;
-        }
-
-        test "deleteMany" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            gap.deleteMany(3);
-            try testing.expectEqual(@as(usize, 2), gap.len);
-            try testing.expectEqual(@as(usize, 2), gap.front);
-            try testing.expect(gap.gap > 0);
         }
 
         /// Deletes one element to the right of the gap
@@ -128,33 +93,11 @@ pub fn GapBuffer(comptime T: type) type {
             self.len -= 1;
         }
 
-        test "deleteRight" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            gap.left();
-            gap.deleteRight();
-            try testing.expectEqual(@as(usize, 4), gap.len);
-            try testing.expectEqual(@as(usize, 4), gap.front);
-            try testing.expect(gap.gap > 0);
-        }
-
         /// Deletes multiple elements to the right of the gap
         pub fn deleteManyRight(self: *Self, num: usize) void {
             assert(self.len - self.front >= num);
             self.gap += num;
             self.len -= num;
-        }
-
-        test "deleteManyRight" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            gap.jump(0);
-            gap.deleteManyRight(5);
-            try testing.expectEqual(@as(usize, 0), gap.len);
-            try testing.expectEqual(@as(usize, 0), gap.front);
-            try testing.expect(gap.gap > 0);
         }
 
         /// Moves the gap to the left by one.
@@ -165,35 +108,12 @@ pub fn GapBuffer(comptime T: type) type {
             self.front -= 1;
         }
 
-        test "left" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insert(1);
-            gap.left();
-            try testing.expectEqual(@as(usize, 1), gap.len);
-            try testing.expectEqual(@as(usize, 0), gap.front);
-            try testing.expect(gap.gap > 0);
-        }
-
         /// Moves the gap to the right by one.
         /// Asserts the gap is non-empty
         pub fn right(self: *Self) void {
             assert(self.gap > 0 and self.len - self.front > 0);
             self.buffer.items[self.front] = self.buffer.items[self.front + self.gap];
             self.front += 1;
-        }
-
-        test "right" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insert(1);
-            gap.left();
-            try testing.expectEqual(@as(usize, 1), gap.len);
-            try testing.expectEqual(@as(usize, 0), gap.front);
-            gap.right();
-            try testing.expectEqual(@as(usize, 1), gap.len);
-            try testing.expectEqual(@as(usize, 1), gap.front);
-            try testing.expect(gap.gap > 0);
         }
 
         /// Moves the gap to a specific index in O(n).
@@ -208,35 +128,14 @@ pub fn GapBuffer(comptime T: type) type {
             }
         }
 
-        test "jump" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            gap.jump(0);
-            try testing.expectEqual(@as(usize, 5), gap.len);
-            try testing.expectEqual(@as(usize, 0), gap.front);
-            gap.jump(5);
-            try testing.expectEqual(@as(usize, 5), gap.len);
-            try testing.expectEqual(@as(usize, 5), gap.front);
-            try testing.expect(gap.gap > 0);
-        }
-
         /// Asserts the index is a valid element
-        pub fn get(self: Self, index: usize) T {
+        /// Returns a pointer to the element.
+        pub fn get(self: Self, index: usize) *T {
             assert(index < self.len);
             if (index >= self.front) {
-                return self.buffer.items[index + self.gap];
+                return &self.buffer.items[index + self.gap];
             }
-            return self.buffer.items[index];
-        }
-
-        test "get" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            gap.left();
-            try testing.expectEqual(@as(usize, '1'), gap.get(0));
-            try testing.expectEqual(@as(usize, '5'), gap.get(4));
+            return &self.buffer.items[index];
         }
 
         /// Copies the buffer into a new slice without any gaps.
@@ -250,20 +149,11 @@ pub fn GapBuffer(comptime T: type) type {
             return slice;
         }
 
-        test "getOwnedSlice" {
-            var gap = GapBuffer(u8).init(testing.allocator);
-            defer gap.deinit();
-            try gap.insertSlice("12345");
-            const actual = try gap.getOwnedSlice();
-            defer testing.allocator.free(actual);
-            try testing.expectEqualSlices(u8, "12345", actual);
-        }
-
         pub const Iterator = struct {
             index: usize = 0,
             gapBuffer: GapBuffer(T),
 
-            pub fn next(it: *Iterator) ?T {
+            pub fn next(it: *Iterator) ?*T {
                 if (it.index >= it.gapBuffer.len) return null;
                 const out = it.gapBuffer.get(it.index);
                 it.index += 1;
@@ -292,35 +182,79 @@ fn growMinSize(current: usize, minimum: usize) usize {
     }
 }
 
+test "init" {
+    const gap = GapBuffer(i256).init(testing.allocator);
+    defer gap.deinit();
+    try testing.expectEqual(@as(usize, 0), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expectEqual(@as(usize, 0), gap.gap);
+}
+
+test "initCapacity" {
+    const gap = try GapBuffer(i256).initCapacity(testing.allocator, 500);
+    defer gap.deinit();
+    try testing.expectEqual(@as(usize, 0), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expectEqual(@as(usize, 0), gap.gap);
+}
+
+test "initCapacity with failing allocator" {
+    const gap = GapBuffer(i256).initCapacity(testing.failing_allocator, 500);
+    try testing.expectError(std.mem.Allocator.Error.OutOfMemory, gap);
+}
+
 test "growMinSize" {
     try std.testing.expect(growMinSize(1, 2) >= 1);
     try std.testing.expect(growMinSize(0, 578) >= 578);
     try std.testing.expect(growMinSize(2, 1e6) >= 1e6);
 }
 
-test "simple inserts" {
+test "grow" {
     var gap = GapBuffer(u8).init(testing.allocator);
     defer gap.deinit();
-    try gap.insert(1);
-    try gap.insert(2);
-    try gap.insert(3);
-    try gap.insert(4);
+    try gap.grow(50);
+    try gap.insertSlice("12345");
+    gap.jump(2);
+    try gap.grow(5);
+    try std.testing.expectEqual(@as(usize, 5), gap.len);
+    try std.testing.expectEqual(@as(usize, 50), gap.gap);
+    try std.testing.expectEqual(@as(usize, 2), gap.front);
     const actual = try gap.getOwnedSlice();
     defer testing.allocator.free(actual);
-    try testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3, 4 }, actual);
-    try testing.expectEqual(@as(usize, 4), gap.len);
-    try testing.expectEqual(@as(usize, 4), gap.front);
+    try testing.expectEqualSlices(u8, "12345", actual);
 }
 
-test "2d inserts" {
-    var gap = GapBuffer(*GapBuffer(u8)).init(testing.allocator);
+test "insert" {
+    {
+        var gap = GapBuffer(i128).init(testing.allocator);
+        defer gap.deinit();
+        try gap.insert(1);
+        try gap.insert(2);
+        try gap.insert(3);
+        try gap.insert(4);
+        const actual = try gap.getOwnedSlice();
+        defer testing.allocator.free(actual);
+        try testing.expectEqualSlices(i128, &[_]i128{ 1, 2, 3, 4 }, actual);
+        try testing.expectEqual(@as(usize, 4), gap.len);
+        try testing.expectEqual(@as(usize, 4), gap.front);
+    }
+    {
+        var gap = GapBuffer(GapBuffer(u8)).init(testing.allocator);
+        defer gap.deinit();
+        try gap.insert(GapBuffer(u8).init(testing.allocator));
+        const i = gap.get(0);
+        defer i.deinit();
+        try gap.get(0).insert(1);
+        try testing.expectEqual(@as(usize, 1), gap.len);
+        try testing.expectEqual(@as(usize, 1), i.len);
+    }
+}
+
+test "insert with failing allocator" {
+    var gap = GapBuffer(u8).init(testing.failing_allocator);
     defer gap.deinit();
-    var s = GapBuffer(u8).init(testing.allocator);
-    try gap.insert(&s);
-    defer s.deinit();
-    try gap.get(0).insert(1);
-    try testing.expectEqual(@as(usize, 1), gap.len);
-    try testing.expectEqual(@as(usize, 1), s.len);
+    const res = gap.insert(1);
+    try testing.expectError(std.mem.Allocator.Error.OutOfMemory, res);
 }
 
 test "slice insert" {
@@ -342,6 +276,84 @@ test "slice insert move" {
     const actual = try gap.getOwnedSlice();
     defer testing.allocator.free(actual);
     try testing.expectEqualSlices(u8, "hel world lo", actual);
+}
+
+test "delete" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insert(5);
+    gap.delete();
+    try testing.expectEqual(@as(usize, 0), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "deleteMany" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.deleteMany(3);
+    try testing.expectEqual(@as(usize, 2), gap.len);
+    try testing.expectEqual(@as(usize, 2), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "deleteRight" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.left();
+    gap.deleteRight();
+    try testing.expectEqual(@as(usize, 4), gap.len);
+    try testing.expectEqual(@as(usize, 4), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "deleteManyRight" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.jump(0);
+    gap.deleteManyRight(5);
+    try testing.expectEqual(@as(usize, 0), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "left" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insert(1);
+    gap.left();
+    try testing.expectEqual(@as(usize, 1), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "right" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insert(1);
+    gap.left();
+    try testing.expectEqual(@as(usize, 1), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    gap.right();
+    try testing.expectEqual(@as(usize, 1), gap.len);
+    try testing.expectEqual(@as(usize, 1), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "jump" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.jump(0);
+    try testing.expectEqual(@as(usize, 5), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
+    gap.jump(5);
+    try testing.expectEqual(@as(usize, 5), gap.len);
+    try testing.expectEqual(@as(usize, 5), gap.front);
+    try testing.expect(gap.gap > 0);
 }
 
 test "move and grow" {
@@ -430,14 +442,32 @@ test "delete complex" {
     try testing.expectEqualSlices(u8, &[_]u8{ 3, 2, 4 }, actual);
 }
 
+test "get" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.left();
+    try testing.expectEqual(@as(usize, '1'), gap.get(0).*);
+    try testing.expectEqual(@as(usize, '5'), gap.get(4).*);
+}
+
 test "get complex" {
     var gap = GapBuffer(u8).init(testing.allocator);
     defer gap.deinit();
     try gap.insert(1);
     try gap.insert(2);
     gap.left();
-    try testing.expectEqual(@as(u8, 1), gap.get(0));
-    try testing.expectEqual(@as(u8, 2), gap.get(1));
+    try testing.expectEqual(@as(u8, 1), gap.get(0).*);
+    try testing.expectEqual(@as(u8, 2), gap.get(1).*);
+}
+
+test "getOwnedSlice" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    const actual = try gap.getOwnedSlice();
+    defer testing.allocator.free(actual);
+    try testing.expectEqualSlices(u8, "12345", actual);
 }
 
 test "iterator complex" {
@@ -451,6 +481,6 @@ test "iterator complex" {
     const expect = [_]u8{ 1, 2, 3, 4 };
     var i: u8 = 0;
     while (iterator.next()) |elem| : (i += 1) {
-        try std.testing.expectEqual(expect[i], elem);
+        try std.testing.expectEqual(expect[i], elem.*);
     }
 }

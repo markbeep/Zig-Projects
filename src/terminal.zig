@@ -30,14 +30,14 @@ pub const Terminal = struct {
 
     x: usize = 0,
     y: usize = 0,
-    content: GapBuffer(*GapBuffer(u8)),
+    content: GapBuffer(GapBuffer(u8)),
     allocator: Allocator,
     options: ?TerminalOptions,
 
     pub fn init(allocator: std.mem.Allocator, options: ?TerminalOptions) Allocator.Error!Self {
-        var buffer = try GapBuffer(*GapBuffer(u8)).initCapacity(allocator, 1000);
-        var line = try GapBuffer(u8).initCapacity(allocator, 10);
-        try buffer.insert(&line);
+        var buffer = try GapBuffer(GapBuffer(u8)).initCapacity(allocator, 1000);
+        const line = try GapBuffer(u8).initCapacity(allocator, 10);
+        try buffer.insert(line);
         return Self{
             .content = buffer,
             .allocator = allocator,
@@ -45,8 +45,9 @@ pub const Terminal = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        for (self.content.buffer.items) |line| {
+    pub fn deinit(self: Self) void {
+        var iterator = self.content.iterator();
+        while (iterator.next()) |line| {
             line.deinit();
         }
         self.content.deinit();
@@ -56,4 +57,13 @@ pub const Terminal = struct {
 test "init" {
     var term = try Terminal.init(testing.allocator, null);
     defer term.deinit();
+    try testing.expectEqual(@as(usize, 0), term.x);
+    try testing.expectEqual(@as(usize, 0), term.y);
+    try testing.expectEqual(@as(usize, 1), term.content.len);
+    try testing.expectEqual(@as(usize, 0), term.content.buffer.items[0].len);
+}
+
+test "init with failing allocator" {
+    const terminal = Terminal.init(testing.failing_allocator, null);
+    try testing.expectError(std.mem.Allocator.Error.OutOfMemory, terminal);
 }
