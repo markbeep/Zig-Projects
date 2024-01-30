@@ -57,6 +57,7 @@
                         zig
                         zls-pkg
                         pkgs.gdb
+                        pkgs.kcov
                     ];
                 };
             }

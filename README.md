@@ -1,5 +1,7 @@
 # Tez ⚡️
 
+![badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/markbeep/1aca0cde5f6b0339e41cf8d7b6a09d5e/raw/test.json&logo=zig)
+
 ### Lightweight text editor written in Zig
 
 Tez is a side project to learn Zig better while also making a lightweight and usable editor.
