@@ -30,10 +30,14 @@ const TerminalOptions = struct {
 pub const Terminal = struct {
     const Self = @This();
     const tabIndentation = 4;
+    const spaces = " " ** tabIndentation;
     const lineInitialCapacity = 10;
 
+    /// The current line the cursor is on
     y: usize = 0,
+    /// The current character a cursor is on
     x: usize = 0,
+    /// The current byte the cursor is on
     byteX: usize = 0,
     content: GapBuffer(GapBuffer(u8)),
     allocator: Allocator,
@@ -59,26 +63,28 @@ pub const Terminal = struct {
         self.content.deinit();
     }
 
+    fn computeBytePosition(self: Self, gap: GapBuffer(u8), charX: usize) !usize {
+        var byteX: usize = 0;
+        if (gap.len > 0) {
+            const owned = try gap.getOwnedSlice();
+            defer self.allocator.free(owned);
+            var iter = (try unicode.Utf8View.init(owned)).iterator();
+            var i: usize = 0;
+            while (iter.nextCodepointSlice()) |ch| : (i += 1) {
+                if (i >= charX) break;
+                byteX += ch.len;
+            }
+        }
+        return byteX;
+    }
+
     fn jump(self: *Self, y: usize, x: usize) !void {
         self.content.jump(y + 1);
         var line = self.content.getLeft();
         line.jump(x);
         self.y = y;
         self.x = x;
-
-        // TODO: figure out how to properly handle character indices
-        // correct the byte x-coordinate
-        self.byteX = 0;
-        if (line.len > 0) {
-            const owned = try line.getOwnedSlice();
-            defer self.allocator.free(owned);
-            var iter = (try unicode.Utf8View.init(owned)).iterator();
-            var i: usize = 0;
-            while (iter.nextCodepointSlice()) |ch| : (i += 1) {
-                if (i >= self.x) break;
-                self.byteX += ch.len;
-            }
-        }
+        self.byteX = try self.computeBytePosition(line.*, self.x);
     }
 
     /// Inserts a slice of characters at the current cursor position.
@@ -109,6 +115,7 @@ pub const Terminal = struct {
     /// newlines and tabs.
     fn addChars(self: *Self, chars: []const u8) !void {
         var start: usize = 0;
+        var pos: usize = 0;
         for (chars, 0..) |c, i| {
             switch (c) {
                 '\n' => {
@@ -117,12 +124,15 @@ pub const Terminal = struct {
                     }
                     try self.insertNewline();
                     start = i + 1;
+                    pos = 0;
                 },
                 '\t' => {
                     if (start < i) {
                         try self.insertSlice(chars[start..i]);
                     }
-                    try self.insertSlice(" " ** tabIndentation);
+                    const spacesToAdd = 4 - pos % 4;
+                    try self.insertSlice(spaces[0..spacesToAdd]);
+                    pos += spacesToAdd + i - start;
                     start = i + 1;
                 },
                 else => {},
@@ -146,6 +156,24 @@ test "init" {
 test "init with failing allocator" {
     const terminal = Terminal.init(testing.failing_allocator, null);
     try testing.expectError(std.mem.Allocator.Error.OutOfMemory, terminal);
+}
+
+test "computeBytePosition" {
+    const a = testing.allocator;
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        const gap = GapBuffer(u8).init(a);
+        try testing.expectEqual(@as(usize, 0), try term.computeBytePosition(gap, 0));
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        var gap = GapBuffer(u8).init(a);
+        defer gap.deinit();
+        try gap.insertSlice("äääää");
+        try testing.expectEqual(@as(usize, 10), try term.computeBytePosition(gap, 5));
+    }
 }
 
 test "jump" {
@@ -265,7 +293,15 @@ test "addChars" {
         defer term.deinit();
         try term.addChars("\tdef foo()");
         try testing.expectEqual(@as(usize, 0), term.y);
-        try testing.expectEqual(@as(usize, 9 + Terminal.tabIndentation), term.x);
-        try testing.expectEqual(@as(usize, 9 + Terminal.tabIndentation), term.byteX);
+        try testing.expectEqual(@as(usize, 13), term.x);
+        try testing.expectEqual(@as(usize, 13), term.byteX);
+    }
+    {
+        var term = try Terminal.init(a, null);
+        defer term.deinit();
+        try term.addChars("\tdef\t\tfoo()");
+        try testing.expectEqual(@as(usize, 0), term.y);
+        try testing.expectEqual(@as(usize, 17), term.x);
+        try testing.expectEqual(@as(usize, 17), term.byteX);
     }
 }
