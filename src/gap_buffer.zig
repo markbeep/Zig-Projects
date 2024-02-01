@@ -119,16 +119,20 @@ pub fn GapBuffer(comptime T: type) type {
         /// Moves the gap to the left by one.
         /// Asserts the gap is non-empty.
         pub fn left(self: *Self) void {
-            assert(self.gap > 0 and self.front > 0);
-            self.buffer.items[self.front + self.gap - 1] = self.buffer.items[self.front - 1];
+            assert(self.front > 0);
+            if (self.gap > 0) {
+                self.buffer.items[self.front + self.gap - 1] = self.buffer.items[self.front - 1];
+            }
             self.front -= 1;
         }
 
         /// Moves the gap to the right by one.
         /// Asserts the gap is non-empty
         pub fn right(self: *Self) void {
-            assert(self.gap > 0 and self.len - self.front > 0);
-            self.buffer.items[self.front] = self.buffer.items[self.front + self.gap];
+            assert(self.len - self.front > 0);
+            if (self.gap > 0) {
+                self.buffer.items[self.front] = self.buffer.items[self.front + self.gap];
+            }
             self.front += 1;
         }
 
