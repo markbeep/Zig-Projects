@@ -5,29 +5,7 @@ const Allocator = std.mem.Allocator;
 const unicode = std.unicode;
 const assert = std.debug.assert;
 
-/// Type of cursor to use.
-///
-/// More information: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h4-Functions-using-CSI-_-ordered-by-the-final-character-lparen-s-rparen:CSI-Ps-SP-q.1D81
-const CursorMode = enum(u4) {
-    blinking_block = 1,
-    steady_block = 2,
-    blinking_underline = 3,
-    steady_underline = 4,
-    blinking_bar = 5,
-    steady_bar = 6,
-};
-
-const EditMode = enum(u2) {
-    normal,
-    insert,
-    visual,
-};
-
-const TerminalOptions = struct {
-    filepath: []const u8,
-};
-
-pub const Terminal = struct {
+pub const CoreEditor = struct {
     const Self = @This();
     const tab_indentation = 4;
     const spaces = " " ** tab_indentation;
@@ -44,17 +22,14 @@ pub const Terminal = struct {
     line_max_x: usize = 0,
     content: GapBuffer(GapBuffer(u8)),
     allocator: Allocator,
-    options: ?TerminalOptions,
-    mode: EditMode = EditMode.normal,
 
-    pub fn init(allocator: std.mem.Allocator, options: ?TerminalOptions) Allocator.Error!Self {
+    pub fn init(allocator: std.mem.Allocator) Allocator.Error!Self {
         var buffer = try GapBuffer(GapBuffer(u8)).initCapacity(allocator, 1000);
         const line = try GapBuffer(u8).initCapacity(allocator, line_initial_capacity);
         try buffer.insert(line);
         return Self{
             .content = buffer,
             .allocator = allocator,
-            .options = options,
         };
     }
 
@@ -207,7 +182,7 @@ pub const Terminal = struct {
 };
 
 test "init" {
-    var term = try Terminal.init(testing.allocator, null);
+    var term = try CoreEditor.init(testing.allocator);
     defer term.deinit();
     try testing.expectEqual(@as(usize, 0), term.x);
     try testing.expectEqual(@as(usize, 0), term.y);
@@ -216,20 +191,20 @@ test "init" {
 }
 
 test "init with failing allocator" {
-    const terminal = Terminal.init(testing.failing_allocator, null);
+    const terminal = CoreEditor.init(testing.failing_allocator);
     try testing.expectError(std.mem.Allocator.Error.OutOfMemory, terminal);
 }
 
 test "computeBytePosition" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         const gap = GapBuffer(u8).init(a);
         try testing.expectEqual(@as(usize, 0), try term.computeBytePosition(gap, 0));
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         var gap = GapBuffer(u8).init(a);
         defer gap.deinit();
@@ -241,7 +216,7 @@ test "computeBytePosition" {
 test "jump" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.jump(0, 0);
         try testing.expectEqual(@as(usize, 0), term.y);
@@ -250,7 +225,7 @@ test "jump" {
         try testing.expectEqual(@as(usize, 0), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("hello\nthere\ngeneral\nkenobi");
         try term.jump(3, 4);
@@ -262,7 +237,7 @@ test "jump" {
         try testing.expectEqual(@as(u8, 'b'), line.getRight().*);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("äää\nöööö");
         try term.jump(1, 3);
@@ -276,7 +251,7 @@ test "jump" {
 test "insertSlice" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.insertSlice("asdf");
         try testing.expectEqual(@as(usize, 0), term.y);
@@ -286,7 +261,7 @@ test "insertSlice" {
         try testing.expectEqual(@as(usize, 4), term.line_max_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.insertSlice("äüＳ");
         try testing.expectEqual(@as(usize, 0), term.y);
@@ -296,7 +271,7 @@ test "insertSlice" {
         try testing.expectEqual(@as(usize, 7), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.insertSlice("2345");
         try term.jump(0, 0);
@@ -315,7 +290,7 @@ test "insertSlice" {
 test "insertNewline" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.insertSlice("a");
         try term.insertNewline();
@@ -325,7 +300,7 @@ test "insertNewline" {
         try testing.expectEqual(@as(usize, 0), term.line_max_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.insertSlice("abcd");
         try term.jump(0, 2);
@@ -347,7 +322,7 @@ test "insertNewline" {
 test "addChars" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("hello");
         const owned = try term.content.get(0).getOwnedSlice();
@@ -360,7 +335,7 @@ test "addChars" {
         try testing.expectEqual(@as(usize, 5), term.last_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("Hello there\nGeneral Kenobi");
         const firstLine = try term.content.get(0).getOwnedSlice();
@@ -377,7 +352,7 @@ test "addChars" {
         try testing.expectEqual(@as(usize, 14), term.last_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("\tdef foo()");
         try testing.expectEqual(@as(usize, 0), term.y);
@@ -386,7 +361,7 @@ test "addChars" {
         try testing.expectEqual(@as(usize, 13), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("\tdef\t\tfoo()");
         try testing.expectEqual(@as(usize, 0), term.y);
@@ -399,7 +374,7 @@ test "addChars" {
 test "moveUp" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("1\n2\n3");
         try term.moveUp(2);
@@ -409,7 +384,7 @@ test "moveUp" {
         try testing.expectEqual(@as(usize, 1), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("ä\n2\n3");
         try term.moveUp(2);
@@ -419,7 +394,7 @@ test "moveUp" {
         try testing.expectEqual(@as(usize, 2), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("1234\na\n12345");
         try term.moveUp(99);
@@ -433,7 +408,7 @@ test "moveUp" {
 test "moveDown" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("1234\na\n12345");
         try term.jump(0, 4);
@@ -448,7 +423,7 @@ test "moveDown" {
 test "moveLeft" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("a");
         try term.moveLeft(99);
@@ -458,7 +433,7 @@ test "moveLeft" {
         try testing.expectEqual(@as(usize, 0), term.byte_x);
     }
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.addChars("äbcdéf");
         try term.moveLeft(1);
@@ -472,7 +447,7 @@ test "moveLeft" {
 test "moveRight" {
     const a = testing.allocator;
     {
-        var term = try Terminal.init(a, null);
+        var term = try CoreEditor.init(a);
         defer term.deinit();
         try term.moveRight(99);
         try testing.expectEqual(@as(usize, 0), term.y);
