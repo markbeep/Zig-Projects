@@ -9,12 +9,12 @@ const assert = std.debug.assert;
 ///
 /// More information: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h4-Functions-using-CSI-_-ordered-by-the-final-character-lparen-s-rparen:CSI-Ps-SP-q.1D81
 const CursorMode = enum(u4) {
-    blinkingBlock = 1,
-    steadyBlock = 2,
-    blinkingUnderline = 3,
-    steadyUnderline = 4,
-    blinkingBar = 5,
-    steadyBar = 6,
+    blinking_block = 1,
+    steady_block = 2,
+    blinking_underline = 3,
+    steady_underline = 4,
+    blinking_bar = 5,
+    steady_bar = 6,
 };
 
 const EditMode = enum(u2) {
@@ -29,16 +29,17 @@ const TerminalOptions = struct {
 
 pub const Terminal = struct {
     const Self = @This();
-    const tabIndentation = 4;
-    const spaces = " " ** tabIndentation;
-    const lineInitialCapacity = 10;
+    const tab_indentation = 4;
+    const spaces = " " ** tab_indentation;
+    /// New line arraylists are initialized with this capacity
+    const line_initial_capacity = 10;
 
     /// The current line the cursor is on
     y: usize = 0,
     /// The current character a cursor is on
     x: usize = 0,
     /// The current byte the cursor is on
-    byteX: usize = 0,
+    byte_x: usize = 0,
     last_x: usize = 0,
     line_max_x: usize = 0,
     content: GapBuffer(GapBuffer(u8)),
@@ -48,7 +49,7 @@ pub const Terminal = struct {
 
     pub fn init(allocator: std.mem.Allocator, options: ?TerminalOptions) Allocator.Error!Self {
         var buffer = try GapBuffer(GapBuffer(u8)).initCapacity(allocator, 1000);
-        const line = try GapBuffer(u8).initCapacity(allocator, lineInitialCapacity);
+        const line = try GapBuffer(u8).initCapacity(allocator, line_initial_capacity);
         try buffer.insert(line);
         return Self{
             .content = buffer,
@@ -67,19 +68,19 @@ pub const Terminal = struct {
 
     /// Computes the amount of bytes the first `charX` characters take up.
     /// Runs in O(n)
-    fn computeBytePosition(self: Self, gap: GapBuffer(u8), charX: usize) !usize {
-        var byteX: usize = 0;
+    fn computeBytePosition(self: Self, gap: GapBuffer(u8), char_x: usize) !usize {
+        var byte_x: usize = 0;
         if (gap.len > 0) {
             const owned = try gap.getOwnedSlice();
             defer self.allocator.free(owned);
             var iter = (try unicode.Utf8View.init(owned)).iterator();
             var i: usize = 0;
             while (iter.nextCodepointSlice()) |ch| : (i += 1) {
-                if (i >= charX) break;
-                byteX += ch.len;
+                if (i >= char_x) break;
+                byte_x += ch.len;
             }
         }
-        return byteX;
+        return byte_x;
     }
 
     /// Jump to a specific character position.
@@ -92,8 +93,8 @@ pub const Terminal = struct {
         self.y = y;
         self.x = x;
         self.last_x = x;
-        self.byteX = try self.computeBytePosition(line.*, self.x);
-        line.jump(self.byteX);
+        self.byte_x = try self.computeBytePosition(line.*, self.x);
+        line.jump(self.byte_x);
     }
 
     /// Inserts a slice of characters at the current cursor position.
@@ -104,27 +105,27 @@ pub const Terminal = struct {
         const chars_added = try unicode.utf8CountCodepoints(chars);
         self.x += chars_added;
         self.last_x = self.x;
-        self.byteX += chars.len;
+        self.byte_x += chars.len;
         self.line_max_x += chars_added;
     }
 
     //// Inserts a newline at the current cursor position
     fn insertNewline(self: *Self) !void {
-        const oldLineLength = self.content.getLeft().len;
-        try self.content.insert(try GapBuffer(u8).initCapacity(self.allocator, lineInitialCapacity));
-        if (self.byteX < oldLineLength) {
-            const newLine = self.content.getLeft();
-            const oldLine = self.content.get(self.y);
-            try newLine.insertSlice(oldLine.buffer.items[self.byteX..oldLineLength]);
-            self.line_max_x = try unicode.utf8CountCodepoints(oldLine.buffer.items[self.byteX..oldLineLength]);
-            oldLine.deleteAllRight();
+        const old_line_length = self.content.getLeft().len;
+        try self.content.insert(try GapBuffer(u8).initCapacity(self.allocator, line_initial_capacity));
+        if (self.byte_x < old_line_length) {
+            const new_line = self.content.getLeft();
+            const old_line = self.content.get(self.y);
+            try new_line.insertSlice(old_line.buffer.items[self.byte_x..old_line_length]);
+            self.line_max_x = try unicode.utf8CountCodepoints(old_line.buffer.items[self.byte_x..old_line_length]);
+            old_line.deleteAllRight();
         } else {
             self.line_max_x = 0;
         }
         self.y += 1;
         self.x = 0;
         self.last_x = 0;
-        self.byteX = 0;
+        self.byte_x = 0;
     }
 
     /// Takes an unfiltered input of characters and inserts them at
@@ -147,9 +148,9 @@ pub const Terminal = struct {
                     if (start < i) {
                         try self.insertSlice(chars[start..i]);
                     }
-                    const spacesToAdd = 4 - pos % 4;
-                    try self.insertSlice(spaces[0..spacesToAdd]);
-                    pos += spacesToAdd + i - start;
+                    const spaces_to_add = 4 - pos % 4;
+                    try self.insertSlice(spaces[0..spaces_to_add]);
+                    pos += spaces_to_add + i - start;
                     start = i + 1;
                 },
                 else => {},
@@ -160,16 +161,16 @@ pub const Terminal = struct {
         }
     }
 
-    fn getMaxCharPos(self: *Self) !struct { byteX: usize, charX: usize } {
+    fn getMaxCharPos(self: *Self) !struct { byte_x: usize, char_x: usize } {
         const owned = try self.content.getLeft().*.getOwnedSlice();
         defer self.allocator.free(owned);
         var iter = (try unicode.Utf8View.init(owned)).iterator();
         var i: usize = 0;
-        var byteX: usize = 0;
+        var byte_x: usize = 0;
         while (iter.nextCodepointSlice()) |ch| : (i += 1) {
-            byteX += ch.len;
+            byte_x += ch.len;
         }
-        return .{ .byteX = byteX, .charX = i };
+        return .{ .byte_x = byte_x, .char_x = i };
     }
 
     /// Moves the cursor up. Caps up to line 0.
@@ -177,10 +178,10 @@ pub const Terminal = struct {
         const pre_last_x = self.last_x;
         const pre_x = @max(self.x, self.last_x);
         try self.jump(self.y -| times, 0);
-        self.line_max_x = (try self.getMaxCharPos()).charX;
+        self.line_max_x = (try self.getMaxCharPos()).char_x;
         self.x = @min(pre_x, self.line_max_x);
         self.last_x = pre_last_x;
-        self.byteX = try self.computeBytePosition(self.content.getLeft().*, self.x);
+        self.byte_x = try self.computeBytePosition(self.content.getLeft().*, self.x);
     }
 
     /// Moves the cursor down. Caps down to the last line.
@@ -188,10 +189,10 @@ pub const Terminal = struct {
         const pre_last_x = self.last_x;
         const pre_x = @max(self.x, self.last_x);
         try self.jump(@min(self.y + times, self.content.len), 0);
-        self.line_max_x = (try self.getMaxCharPos()).charX;
+        self.line_max_x = (try self.getMaxCharPos()).char_x;
         self.x = @min(pre_x, self.line_max_x);
         self.last_x = pre_last_x;
-        self.byteX = try self.computeBytePosition(self.content.getLeft().*, self.x);
+        self.byte_x = try self.computeBytePosition(self.content.getLeft().*, self.x);
     }
 
     /// Moves the cursor to the left. Caps to index 0.
@@ -246,7 +247,7 @@ test "jump" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 0), term.x);
         try testing.expectEqual(@as(usize, 0), term.last_x);
-        try testing.expectEqual(@as(usize, 0), term.byteX);
+        try testing.expectEqual(@as(usize, 0), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -268,7 +269,7 @@ test "jump" {
         try testing.expectEqual(@as(usize, 1), term.y);
         try testing.expectEqual(@as(usize, 3), term.x);
         try testing.expectEqual(@as(usize, 3), term.last_x);
-        try testing.expectEqual(@as(usize, 6), term.byteX);
+        try testing.expectEqual(@as(usize, 6), term.byte_x);
     }
 }
 
@@ -281,7 +282,7 @@ test "insertSlice" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 4), term.x);
         try testing.expectEqual(@as(usize, 4), term.last_x);
-        try testing.expectEqual(@as(usize, 4), term.byteX);
+        try testing.expectEqual(@as(usize, 4), term.byte_x);
         try testing.expectEqual(@as(usize, 4), term.line_max_x);
     }
     {
@@ -292,7 +293,7 @@ test "insertSlice" {
         try testing.expectEqual(@as(usize, 3), term.x);
         try testing.expectEqual(@as(usize, 3), term.last_x);
         try testing.expectEqual(@as(usize, 3), term.line_max_x);
-        try testing.expectEqual(@as(usize, 7), term.byteX);
+        try testing.expectEqual(@as(usize, 7), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -304,7 +305,7 @@ test "insertSlice" {
         try testing.expectEqual(@as(usize, 2), term.x);
         try testing.expectEqual(@as(usize, 2), term.last_x);
         try testing.expectEqual(@as(usize, 6), term.line_max_x);
-        try testing.expectEqual(@as(usize, 2), term.byteX);
+        try testing.expectEqual(@as(usize, 2), term.byte_x);
         const line = try term.content.get(0).getOwnedSlice();
         defer a.free(line);
         try testing.expectEqualSlices(u8, "012345", line);
@@ -382,7 +383,7 @@ test "addChars" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 13), term.x);
         try testing.expectEqual(@as(usize, 13), term.last_x);
-        try testing.expectEqual(@as(usize, 13), term.byteX);
+        try testing.expectEqual(@as(usize, 13), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -391,7 +392,7 @@ test "addChars" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 17), term.x);
         try testing.expectEqual(@as(usize, 17), term.last_x);
-        try testing.expectEqual(@as(usize, 17), term.byteX);
+        try testing.expectEqual(@as(usize, 17), term.byte_x);
     }
 }
 
@@ -405,7 +406,7 @@ test "moveUp" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 1), term.x);
         try testing.expectEqual(@as(usize, 1), term.last_x);
-        try testing.expectEqual(@as(usize, 1), term.byteX);
+        try testing.expectEqual(@as(usize, 1), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -415,7 +416,7 @@ test "moveUp" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 1), term.x);
         try testing.expectEqual(@as(usize, 1), term.last_x);
-        try testing.expectEqual(@as(usize, 2), term.byteX);
+        try testing.expectEqual(@as(usize, 2), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -425,7 +426,7 @@ test "moveUp" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 4), term.x);
         try testing.expectEqual(@as(usize, 5), term.last_x);
-        try testing.expectEqual(@as(usize, 4), term.byteX);
+        try testing.expectEqual(@as(usize, 4), term.byte_x);
     }
 }
 
@@ -440,7 +441,7 @@ test "moveDown" {
         try testing.expectEqual(@as(usize, 2), term.y);
         try testing.expectEqual(@as(usize, 4), term.x);
         try testing.expectEqual(@as(usize, 4), term.last_x);
-        try testing.expectEqual(@as(usize, 4), term.byteX);
+        try testing.expectEqual(@as(usize, 4), term.byte_x);
     }
 }
 
@@ -454,7 +455,7 @@ test "moveLeft" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 0), term.x);
         try testing.expectEqual(@as(usize, 0), term.last_x);
-        try testing.expectEqual(@as(usize, 0), term.byteX);
+        try testing.expectEqual(@as(usize, 0), term.byte_x);
     }
     {
         var term = try Terminal.init(a, null);
@@ -464,7 +465,7 @@ test "moveLeft" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 5), term.x);
         try testing.expectEqual(@as(usize, 5), term.last_x);
-        try testing.expectEqual(@as(usize, 7), term.byteX);
+        try testing.expectEqual(@as(usize, 7), term.byte_x);
     }
 }
 
@@ -477,6 +478,6 @@ test "moveRight" {
         try testing.expectEqual(@as(usize, 0), term.y);
         try testing.expectEqual(@as(usize, 0), term.x);
         try testing.expectEqual(@as(usize, 0), term.last_x);
-        try testing.expectEqual(@as(usize, 0), term.byteX);
+        try testing.expectEqual(@as(usize, 0), term.byte_x);
     }
 }
