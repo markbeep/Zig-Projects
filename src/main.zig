@@ -1,30 +1,24 @@
 const std = @import("std");
 const os = std.os;
-const t = @import("old_terminal.zig");
+const ui = @import("ui.zig");
 
-var term: ?t.Terminal = null;
+var term: ?ui.Terminal = null;
 
 fn handleSigWinch(_: c_int) callconv(.C) void {
-    term.?.checkTerminalSize() catch {};
-    term.?.render() catch {};
+    term.?.checkTerminalSize();
+    term.?.render();
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    term = try t.Terminal.init(gpa.allocator());
+    term = try ui.Terminal.init(gpa.allocator());
     defer term.?.deinit();
-    try term.?.setupTerminal();
-    defer term.?.restoreTerminal();
 
     try os.sigaction(os.SIG.WINCH, &os.Sigaction{
         .handler = .{ .handler = handleSigWinch },
         .mask = os.empty_sigset,
         .flags = 0,
     }, null);
-
-    try term.?.render();
-
-    try term.?.listenForInput();
 }

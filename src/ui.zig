@@ -1,4 +1,6 @@
 const core = @import("core.zig");
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Type of cursor to use.
 ///
@@ -23,5 +25,29 @@ const TerminalOptions = struct {
 };
 
 pub const Terminal = struct {
+    const Self = @This();
+
     edit_mode: EditMode = EditMode.normal,
+    editor: core.CoreEditor,
+
+    /// Initializes a terminal instance
+    pub fn init(allocator: Allocator) !Self {
+        const editor = try core.CoreEditor.init(allocator);
+
+        return Self{
+            .editor = editor,
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.editor.deinit();
+    }
+
+    pub fn render(self: Self) void {
+        _ = self;
+    }
+
+    pub fn checkTerminalSize(self: *Self) void {
+        _ = self;
+    }
 };
