@@ -116,6 +116,12 @@ pub fn GapBuffer(comptime T: type) type {
             self.len -= end;
         }
 
+        pub fn deleteAll(self: *Self) void {
+            self.gap += self.len;
+            self.len = 0;
+            self.front = 0;
+        }
+
         /// Moves the gap to the left by one.
         /// Asserts the gap is non-empty.
         pub fn left(self: *Self) void {
@@ -372,6 +378,17 @@ test "deleteAllRight" {
     gap.deleteAllRight();
     try testing.expectEqual(@as(usize, 2), gap.len);
     try testing.expectEqual(@as(usize, 2), gap.front);
+    try testing.expect(gap.gap > 0);
+}
+
+test "deleteAll" {
+    var gap = GapBuffer(u8).init(testing.allocator);
+    defer gap.deinit();
+    try gap.insertSlice("12345");
+    gap.jump(2);
+    gap.deleteAll();
+    try testing.expectEqual(@as(usize, 0), gap.len);
+    try testing.expectEqual(@as(usize, 0), gap.front);
     try testing.expect(gap.gap > 0);
 }
 
