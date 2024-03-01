@@ -60,7 +60,7 @@ pub const CoreEditor = struct {
 
     /// Jump to a specific character position.
     /// Resets `last_x`.
-    fn jump(self: *Self, y: usize, x: usize) !void {
+    pub fn jump(self: *Self, y: usize, x: usize) !void {
         assert(y <= self.content.len);
         self.content.jump(y + 1);
         var line = self.content.getLeft();
@@ -106,7 +106,7 @@ pub const CoreEditor = struct {
     /// Takes an unfiltered input of characters and inserts them at
     /// the current cursor position. Handles special characters like
     /// newlines and tabs.
-    fn addChars(self: *Self, chars: []const u8) !void {
+    pub fn addChars(self: *Self, chars: []const u8) !void {
         var start: usize = 0;
         var pos: usize = 0;
         for (chars, 0..) |c, i| {
@@ -149,7 +149,7 @@ pub const CoreEditor = struct {
     }
 
     /// Moves the cursor up. Caps up to line 0.
-    fn moveUp(self: *Self, times: usize) !void {
+    pub fn moveUp(self: *Self, times: usize) !void {
         const pre_last_x = self.last_x;
         const pre_x = @max(self.x, self.last_x);
         try self.jump(self.y -| times, 0);
@@ -160,7 +160,7 @@ pub const CoreEditor = struct {
     }
 
     /// Moves the cursor down. Caps down to the last line.
-    fn moveDown(self: *Self, times: usize) !void {
+    pub fn moveDown(self: *Self, times: usize) !void {
         const pre_last_x = self.last_x;
         const pre_x = @max(self.x, self.last_x);
         try self.jump(@min(self.y + times, self.content.len), 0);
@@ -171,12 +171,12 @@ pub const CoreEditor = struct {
     }
 
     /// Moves the cursor to the left. Caps to index 0.
-    fn moveLeft(self: *Self, times: usize) !void {
+    pub fn moveLeft(self: *Self, times: usize) !void {
         try self.jump(self.y, self.x -| times);
     }
 
     /// Moves the cursor to the right. Caps to the last character.
-    fn moveRight(self: *Self, times: usize) !void {
+    pub fn moveRight(self: *Self, times: usize) !void {
         try self.jump(self.y, @min(self.x + times, self.line_max_x));
     }
 };
