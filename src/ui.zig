@@ -4,6 +4,8 @@ const os = std.os;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const GapBuffer = @import("gap_buffer.zig").GapBuffer;
+const key_mappings = @import("key_mapping.zig");
+const logger = @import("log.zig").logger;
 
 /// Type of cursor to use.
 ///
@@ -167,6 +169,12 @@ pub const Terminal = struct {
 
     pub fn handleInput(self: *Self, buf: [8]u8, size: usize) !void {
         if (size == 0) return;
+
+        const input = key_mappings.parseInput(buf, size) catch {
+            logger.warn("Invalid/unhandled input: '{s}' ({any})", .{ buf[0..size], buf[0..size] });
+            return;
+        };
+
         // FIXME: very rough input handler which crashes if anything other than ':q' is inserted
         switch (self.edit_mode) {
             .normal => {
@@ -183,7 +191,14 @@ pub const Terminal = struct {
             },
             .insert => {
                 // TODO: Add way to exit insert mode with escape
-                try self.editor.addChars(buf[0..size]);
+                if (input.is_print) {
+                    try self.editor.addChars(buf[0..size]);
+                } else {
+                    switch (input.key_code) {
+                        .escape => self.edit_mode = .normal,
+                        else => @panic("unimplemented"),
+                    }
+                }
             },
             .command => {
                 switch (buf[0]) {
