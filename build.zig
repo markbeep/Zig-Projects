@@ -76,26 +76,6 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/core.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
-    const ui_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/ui.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    const run_ui_unit_tests = b.addRunArtifact(ui_unit_tests);
-
-    const gap_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/gap_buffer.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    const run_gap_unit_tests = b.addRunArtifact(gap_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
@@ -108,16 +88,13 @@ pub fn build(b: *std.Build) void {
     const coverage = b.option(bool, "test-coverage", "Genrate test coverage") orelse false;
     if (coverage) {
         const kcov = b.addSystemCommand(&.{ "kcov", "--include-pattern=src", "kcov-output" });
-        kcov.addArtifactArg(lib_unit_tests);
-        run_lib_unit_tests.step.dependOn(&kcov.step);
+        kcov.addArtifactArg(exe_unit_tests);
+        run_exe_unit_tests.step.dependOn(&kcov.step);
     }
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_ui_unit_tests.step);
-    test_step.dependOn(&run_gap_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
 }

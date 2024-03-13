@@ -2,6 +2,7 @@ const std = @import("std");
 const os = std.os;
 const ui = @import("ui.zig");
 const print = std.debug.print;
+const testing = std.testing;
 
 var term: ?ui.Terminal = null;
 
@@ -36,4 +37,9 @@ pub fn main() !void {
         try term.?.handleInput(buf, size);
         term.?.render();
     }
+}
+
+test "main" {
+    const terminal = try ui.Terminal.init(testing.allocator, .{ .setup_terminal = false });
+    defer terminal.deinit();
 }

@@ -179,14 +179,12 @@ pub const Terminal = struct {
         if (size == 0) return;
 
         const input = key_mappings.parseInput(buf, size) catch {
-            logger.warn("Invalid/unhandled input: '{s}' ({any})", .{ buf[0..size], buf[0..size] });
             return;
         };
 
-        // FIXME: very rough input handler which crashes if anything other than ':q' is inserted
         switch (self.edit_mode) {
             .normal => {
-                switch (input.value[0]) {
+                switch (buf[0]) { // TODO: support longer sequences
                     ':' => {
                         self.edit_mode = .command;
                         self.command_buffer.deleteAll();
@@ -214,12 +212,12 @@ pub const Terminal = struct {
                         if (self.command_buffer.len > 0) {
                             const command = try self.command_buffer.getOwnedSlice();
                             defer self.allocator.free(command);
-                            defer self.executeCommand(command);
+                            self.executeCommand(command);
                         }
                         self.edit_mode = .normal;
                     },
                     .printable => {
-                        try self.command_buffer.insertSlice(input.value);
+                        try self.command_buffer.insertSlice(buf[0..size]);
                     },
                     else => @panic("unimplemented"),
                 }
@@ -236,7 +234,9 @@ test "init and quit ui" {
     try testing.expect(term.open);
     const inp_1 = [8]u8{ ':', 0, 0, 0, 0, 0, 0, 0 };
     const inp_2 = [8]u8{ 'q', 0, 0, 0, 0, 0, 0, 0 };
+    const enter = [8]u8{ '\x0d', 0, 0, 0, 0, 0, 0, 0 };
     try term.handleInput(inp_1, 1);
     try term.handleInput(inp_2, 1);
+    try term.handleInput(enter, 1);
     try testing.expect(!term.open);
 }
