@@ -41,6 +41,7 @@ pub const Terminal = struct {
     command_buffer: GapBuffer(u8),
     options: ?TerminalOptions,
     original_termios: ?os.termios,
+    allocator: Allocator,
 
     /// Initializes a terminal instance and initializes the terminal
     pub fn init(allocator: Allocator, options: ?TerminalOptions) !Self {
@@ -52,6 +53,7 @@ pub const Terminal = struct {
             .command_buffer = GapBuffer(u8).init(allocator),
             .options = options,
             .original_termios = null,
+            .allocator = allocator,
         };
 
         if (options) |opt| {
@@ -167,6 +169,12 @@ pub const Terminal = struct {
         _ = self;
     }
 
+    fn executeCommand(self: *Self, command: []const u8) void {
+        if (command[0] == 'q') {
+            self.open = false;
+        }
+    }
+
     pub fn handleInput(self: *Self, buf: [8]u8, size: usize) !void {
         if (size == 0) return;
 
@@ -178,7 +186,7 @@ pub const Terminal = struct {
         // FIXME: very rough input handler which crashes if anything other than ':q' is inserted
         switch (self.edit_mode) {
             .normal => {
-                switch (buf[0]) {
+                switch (input.value[0]) {
                     ':' => {
                         self.edit_mode = .command;
                         self.command_buffer.deleteAll();
@@ -201,9 +209,17 @@ pub const Terminal = struct {
                 }
             },
             .command => {
-                switch (buf[0]) {
-                    'q' => {
-                        self.open = false;
+                switch (input.key_code) {
+                    .enter => {
+                        if (self.command_buffer.len > 0) {
+                            const command = try self.command_buffer.getOwnedSlice();
+                            defer self.allocator.free(command);
+                            defer self.executeCommand(command);
+                        }
+                        self.edit_mode = .normal;
+                    },
+                    .printable => {
+                        try self.command_buffer.insertSlice(input.value);
                     },
                     else => @panic("unimplemented"),
                 }

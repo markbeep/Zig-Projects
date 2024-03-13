@@ -1,13 +1,16 @@
 const std = @import("std");
 const ascii = std.ascii;
+const unicode = std.unicode;
 
 pub const ParseError = error{
     invalid_character,
+    unhandled_escape,
     unhandled_case,
 };
 
 pub const KeyCode = enum {
     printable,
+    enter,
 
     arrow_up,
     arrow_down,
@@ -27,6 +30,8 @@ pub const Input = struct {
     key_code: KeyCode,
     is_print: bool = false,
     is_control: bool = false,
+    /// Escape sequence
+    is_escape_seq: bool = false,
     value: []const u8,
 };
 
@@ -48,14 +53,44 @@ const keymappings = std.ComptimeStringMap(KeyCode, [_]MapKV{
 });
 
 pub fn parseInput(buf: [8]u8, size: usize) ParseError!Input {
-    if (size == 1) {
-        if (ascii.isPrint(buf[0])) {
+    if (buf[0] == '\n') {
+        return Input{
+            .is_print = true,
+            .key_code = .enter,
+            .value = buf[0..1],
+        };
+    } else if (ascii.isPrint(buf[0])) { // single printable ascii chars
+        return Input{
+            .is_print = true,
+            .key_code = .printable,
+            .value = buf[0..1],
+        };
+    } else if (buf[0] == 0x1b) { // escape sequence
+        const key_code = keymappings.get(buf[1..size]);
+        if (key_code) |k| {
             return Input{
-                .is_print = true,
-                .key_code = .printable,
-                .value = buf[0..1],
+                .is_escape_seq = true,
+                .key_code = k,
+                .value = buf[0..size],
             };
-        } else return ParseError.invalid_character;
+        } else {
+            return ParseError.unhandled_escape;
+        }
+    } else if (ascii.isControl(buf[0])) {
+        return Input{
+            .is_control = true,
+            .value = buf[0..size],
+            .key_code = .printable,
+        };
     }
+
+    if (unicode.utf8ValidateSlice(buf[0..size])) {
+        return Input{
+            .is_print = true,
+            .key_code = .printable,
+            .value = buf[0..size],
+        };
+    }
+
     return ParseError.unhandled_case;
 }
