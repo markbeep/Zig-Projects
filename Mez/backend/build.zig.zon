@@ -1,0 +1,38 @@
+.{
+    .name = "Mez",
+    .version = "0.0.0",
+    .minimum_zig_version = "0.12.0",
+
+    .dependencies = .{
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/ee92e0a6feca8b831fea9657dcf69a79af35a07c.tar.gz",
+            .hash = "1220e4cb6dc053a4249a9b745f2d41ada45dbaa6d8732552404a44d986ea9750c439",
+        },
+        .zul = .{
+            .url = "https://github.com/karlseguin/zul/archive/ad678420de998e26263ba56bfde28285c4203b1e.tar.gz",
+            .hash = "1220ccd8a2bf6cec0eab0a45d520b3d4b57fbaabd594e94908608c0dcc83961db0a2",
+        },
+        .logz = .{
+            .url = "https://github.com/karlseguin/log.zig/archive/2f17be4b6bbd32884df562a8d0501c15ec3bb928.tar.gz",
+            .hash = "1220347c287af8b265e36cffaf1c29e22da887e8fdcf38310e7b7d3c65ce64acf4f0",
+        },
+        .hiredis = .{
+            .url = "https://github.com/redis/hiredis/archive/v1.2.0.tar.gz",
+            .hash = "12208a5afde556effa03becdce5fba181c4d66c4e8a7560c11fd8858ea4b3e4c5f02",
+        },
+    },
+
+    .paths = .{
+        // This makes *all* files, recursively, included in this package. It is generally
+        // better to explicitly list the files and directories instead, to insure that
+        // fetching from tarballs, file system paths, and version control all result
+        // in the same contents hash.
+        "",
+        // For example...
+        //"build.zig",
+        //"build.zig.zon",
+        //"src",
+        //"LICENSE",
+        //"README.md",
+    },
+}
