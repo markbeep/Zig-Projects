@@ -21,6 +21,12 @@ Frontend is slightly missing for it to be "fullstack" though. First project were
 will automatically be downloaded and built by the Zig package manager making hiredis usable in the Zig
 code without writing any wrappers.
 
-- **TSX Parser:** This project uses two C libraries: tree-sitter and the Typescript/TSX tree-sitter plugin.
+- **Parse:** A TSX Parser that doesn't really do anything yet. This project uses two C libraries: tree-sitter and the Typescript/TSX tree-sitter plugin.
 The motivation behind this project was to try out tree-sitter, get more experience with using a C library in
 using C libraries in Zig, and also learning how the `extern` keyword can be used.
+
+## Nix ❄️
+
+I'm a Nix enthusiast of course. You'll find a `flake.nix` file in each which can be used to develop with the correct
+Zig version locally using `zig develop`. Can recommend using direnv to automatically load the flake when you
+enter the directory.
