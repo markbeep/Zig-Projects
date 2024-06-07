@@ -23,15 +23,17 @@ jobs:
 
       - uses: goto-bus-stop/setup-zig@v2
         with:
-          version: 0.12.0-dev.2316+ac2930332
+          version: 0.12.0
 
       - name: Install kcov
+        working-directory: ./Tez
         run: |
           wget https://github.com/SimonKagstrom/kcov/releases/download/v42/kcov-amd64.tar.gz
           tar xzf kcov-amd64.tar.gz
           install -Dm755 usr/local/bin/kcov /usr/local/bin/kcov
 
       - name: Test
+        working-directory: ./Tez
         run: |
           zig build -Dtarget=${{ matrix.architecture }} test -Dtest-coverage --summary all
           COVERAGE_PERCENTAGE=$(jq -r '.percent_covered' kcov-output/test/coverage.json)
@@ -39,6 +41,7 @@ jobs:
 
       - name: Create Coverage Badge
         uses: schneegans/dynamic-badges-action@v1.7.0
+        working-directory: ./Tez
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 1aca0cde5f6b0339e41cf8d7b6a09d5e
