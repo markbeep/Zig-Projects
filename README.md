@@ -1,54 +1,26 @@
-# Tez ⚡️
+# Zig Projects ⚡️
 
-![badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/markbeep/1aca0cde5f6b0339e41cf8d7b6a09d5e/raw/test.json&logo=zig)
+To practice Zig I've started doing a varied selection of projects to foremost learn the language
+and also see for myself how Zig handles different situations/projects. To avoid the clutter of
+tons of small Zig projects filling my Github profile, each with an incomplete project, I've decided
+to just create a general repo for all of these kinds of Zig projects.
 
-### Lightweight text editor written in Zig
+While with these projects I do aim to make the code future proof and structure them like a long-term
+project, I will most likely not continue or finish most of these projects. If there's any project
+I find really nice I will make it its own repository.
 
-Tez is a side project to learn Zig better while also making a lightweight and usable editor.
+## Projects 🦎
 
-![Hello world example in zig using Tez](media/start.png)
+- **Tez:** Text Editor in Zig. Acronym actually came retrospectively. Just thought Tez would be funny
+way to pun "text" with the typical 3 letter and Z words of Zig projects. Rewrote it in an attempt to
+add Vim keybinds, but never got around to finishing the rewrite, so it is in a slightly broken state now.
 
-## Usage
+- **Mez:** (Fullstack) messaging app. Main goal here was to try out how a web-server in Zig would work.
+Frontend is slightly missing for it to be "fullstack" though. First project were I added a C library
+(hiredis: C Redis library). Very powerful. Anybody can develop with or ontop of that project and hiredis
+will automatically be downloaded and built by the Zig package manager making hiredis usable in the Zig
+code without writing any wrappers.
 
-Tez currently has limited functionality. You can open and edit files as of now. There's no LSP, syntax highlighting or
-proper error handling as of now. If you try to create a file in a non-existent directory it will crash when you try to save
-as of now. Additionally, if you open Tez without specifying a file, you can't open a new file buffer yet.
-
-```sh
-tez sample.txt
-```
-
-## Keybinds
-The editor is non-modal as of now. Keybinds are a mix of useful VIM and VSC keybinds.
-Movement is done with the arrow keys (sorry VIM diehards).
-
-Non-exhaustive list of current keybinds:
-
-- HOME: Jump to start of line
-- END: Jump to end of line
-- CTRL-S: Save file
-- CTRL-C: Close file (without saving)
-- CTRL-D: Jump down half a page
-- CTRL-U: Jump up half a page
-
-You can also just open the editor by using `tez` on its own. Currently there's no way to save
-what written to a file if Tez is opened without a path.
-
-## Local Development
-
-Project was built using [Zig v0.12.0](https://github.com/ziglang/zig). For local development execute:
-
-```sh
-zig build run
-```
-
-### Nix
-
-Alternatively you can also use Nix:
-
-```sh
-nix develop github:markbeep/Tez # get required development tools
-nix run github:markbeep/Tez # directly runs the editor
-```
-
-_Note, leave out the `github:markbeep/Tez` when you want to run the local version._
+- **TSX Parser:** This project uses two C libraries: tree-sitter and the Typescript/TSX tree-sitter plugin.
+The motivation behind this project was to try out tree-sitter, get more experience with using a C library in
+using C libraries in Zig, and also learning how the `extern` keyword can be used.
