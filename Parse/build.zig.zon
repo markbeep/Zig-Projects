@@ -1,0 +1,22 @@
+.{
+    .name = "Parse",
+    .version = "0.0.0",
+
+    .minimum_zig_version = "0.12.0",
+    .dependencies = .{
+        .@"tree-sitter" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v0.22.6.tar.gz",
+            .hash = "1220360c409da6185064e26fbfe3fdfe369959397907f8e8c6e6466db5b4577feee1",
+        },
+        .@"tree-sitter-typescript" = .{
+            .url = "https://github.com/tree-sitter/tree-sitter-typescript/archive/4ad3010c91d700026d036b5230e2d99ba94ae8a4.tar.gz",
+            .hash = "122017d2bb37248ee2c629920d1ad8027605ea87c565b7193e620517e1ba3fedf5a2",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}
