@@ -15,15 +15,34 @@ interface LoadedProps {
   module: AddModuleExports;
 }
 
-const Loaded: React.FC<LoadedProps> = ({ module }) => {
+function getBuffer(
+  getBufferPointer: AddModuleExports["getBufferPointer"],
+): Uint8Array {
   const array = new Uint8Array(moduleMemory.buffer);
-  const offset = module.getBufferPointer();
-  const data = array.slice(offset, offset + 16);
+  const offset = getBufferPointer();
+  return array.slice(offset, offset + 16);
+}
 
-  console.log("data", data);
+const Loaded: React.FC<LoadedProps> = ({ module }) => {
+  const [val, setVal] = useState<Uint8Array>(
+    getBuffer(module.getBufferPointer),
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      module.computeBuffer();
+      setVal(getBuffer(module.getBufferPointer));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  val.entries();
+
   return (
     <div>
-      Added up: {module.add(1, 2)} Offset: {offset}
+      <h1>Ayoooo</h1>
+      {val.join(", ")}
     </div>
   );
 };

@@ -24,7 +24,10 @@ export const ModuleProvider: React.FC<
 
   useEffect(() => {
     WebAssembly.instantiateStreaming(fetch("/add.wasm"), {
-      env: { moduleMemory },
+      env: {
+        memory: moduleMemory,
+        print: (num: number) => console.log(`Number: ${num}`),
+      },
     }).then(a => setModule(a.instance.exports as unknown as AddModuleExports));
   }, []);
 
