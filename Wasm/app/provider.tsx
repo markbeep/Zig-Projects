@@ -11,8 +11,8 @@ export interface AddModuleExports {
 export const ModuleContext = React.createContext<AddModuleExports | null>(null);
 
 export const moduleMemory = new WebAssembly.Memory({
-  initial: 18,
-  maximum: 18,
+  initial: 14,
+  maximum: 14,
 });
 
 interface ModuleProviderProps {}

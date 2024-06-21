@@ -16,7 +16,7 @@ export const Perlin: React.FC<PerlinProps> = ({}) => {
 
 function getBuffer(offset: number): Uint8Array {
   const array = new Uint8Array(moduleMemory.buffer);
-  return array.slice(offset, offset + 500 * 500);
+  return array.slice(offset, offset + 500 * 500 * 3); // RGB
 }
 
 interface PerlinCanvasProps {
@@ -38,8 +38,11 @@ const PerlinCanvas: React.FC<PerlinCanvasProps> = ({ module }) => {
     const arr = getBuffer(module.getBufferPointer());
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        const shade = arr[y * width + x] / 1;
-        canvas.fillStyle = `rgb(${shade}, ${shade}, ${shade})`;
+        const r = arr[(y * width + x) * 3];
+        const g = arr[(y * width + x) * 3 + 1];
+        const b = arr[(y * width + x) * 3 + 2];
+        const rgb = (r << 16) + (g << 8) + b;
+        canvas.fillStyle = `#${rgb.toString(16)}`;
         canvas.fillRect(x, y, 1, 1);
       }
     }
