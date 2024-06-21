@@ -17,8 +17,8 @@ pub fn build(b: *std.Build) void {
     lib.rdynamic = true;
     lib.import_memory = true;
     lib.stack_size = std.wasm.page_size;
-    lib.initial_memory = std.wasm.page_size * 2;
-    lib.max_memory = std.wasm.page_size * 2;
+    lib.initial_memory = std.wasm.page_size * 18;
+    lib.max_memory = std.wasm.page_size * 18;
 
     const install = b.addInstallArtifact(lib, .{});
 

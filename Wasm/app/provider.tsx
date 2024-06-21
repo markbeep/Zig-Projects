@@ -3,16 +3,16 @@
 import React, { useEffect, useState } from "react";
 
 export interface AddModuleExports {
-  add(a: number, b: number): number;
   getBufferPointer(): number;
-  computeBuffer(): void;
+  computePerlin(): void;
+  setSeed(seed: number): void;
 }
 
 export const ModuleContext = React.createContext<AddModuleExports | null>(null);
 
 export const moduleMemory = new WebAssembly.Memory({
-  initial: 2,
-  maximum: 2,
+  initial: 18,
+  maximum: 18,
 });
 
 interface ModuleProviderProps {}
