@@ -1,7 +1,10 @@
-const std = @import("std");
 const p = @import("perlin.zig");
 
 extern fn print(i32) void;
+
+// WebGL
+extern fn glClearColor(f32, f32, f32, f32) void;
+extern fn glClear() void;
 
 // 500x500*3 RGB pixels
 const width = 500;
@@ -14,6 +17,15 @@ export fn getBufferPointer() [*]u8 {
 
 export fn setSeed(s: i32) void {
     p.setSeed(s);
+}
+
+export fn init() void {
+    glClearColor(1, 0, 0, 1);
+    glClear();
+}
+
+export fn update(timestamp: f64) void {
+    _ = timestamp;
 }
 
 export fn computePerlin() void {
