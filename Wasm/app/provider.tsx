@@ -1,21 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 export interface AddModuleExports {
-  getBufferPointer(): number;
-  computePerlin(): void;
-  setSeed(seed: number): void;
   init(): void;
   update(time: DOMHighResTimeStamp): void;
+  keyboard(key: number, down: boolean): void;
 }
 
 export const moduleMemory = new WebAssembly.Memory({
-  initial: 14,
-  maximum: 14,
+  initial: 18,
+  maximum: 18,
 });
 
-export const useModule = (gl: WebGLRenderingContext | undefined) => {
+const width = 500;
+const height = 500;
+
+let buffer: Uint8ClampedArray | null = null;
+
+function getBuffer(offset: number) {
+  const buffer = new Uint8ClampedArray(
+    moduleMemory.buffer,
+    offset,
+    width * height * 4,
+  );
+  return buffer;
+}
+
+export const useModule = (gl: CanvasRenderingContext2D | undefined) => {
   const [module, setModule] = useState<AddModuleExports | null>(null);
 
   useEffect(() => {
@@ -24,12 +36,15 @@ export const useModule = (gl: WebGLRenderingContext | undefined) => {
     WebAssembly.instantiateStreaming(fetch("/add.wasm"), {
       env: {
         memory: moduleMemory,
-        print: (num: number) => console.log(`Number: ${num}`),
 
-        // WebGL
-        glClearColor: (r: number, g: number, b: number, a: number) =>
-          gl.clearColor(r, g, b, a),
-        glClear: () => gl.clear(gl.COLOR_BUFFER_BIT),
+        // Functions
+        drawBuffer: (offset: number) => {
+          if (!buffer) {
+            buffer = getBuffer(offset);
+          }
+          const imageData = new ImageData(buffer, width, height);
+          gl.putImageData(imageData, 0, 0);
+        },
       },
     }).then(a => setModule(a.instance.exports as unknown as AddModuleExports));
   }, [gl]);
