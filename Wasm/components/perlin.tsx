@@ -1,7 +1,7 @@
 "use client";
 
 import { AddModuleExports, useModule } from "@/app/provider";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 interface WebGLProps {}
 
@@ -14,6 +14,8 @@ export const WebGL: React.FC<WebGLProps> = () => {
     if (ref.current === null) return;
     const gl = ref.current?.getContext("2d");
     if (!gl) return;
+    gl.canvas.height = 500;
+    gl.canvas.width = 500;
     setGl(gl);
   }, [ref]);
 

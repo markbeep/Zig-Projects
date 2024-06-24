@@ -39,7 +39,7 @@ export fn update(timestamp: f64) void {
     for (0..height) |y| {
         for (0..width) |x| {
             if (y == 0 or y == height - 1 or x == 0 or x == width - 1) {
-                setColor(x, y, 255, 255, 255, 255);
+                setColor(x, y, 0, 255, 0, 255);
                 continue;
             }
 
