@@ -1,6 +1,6 @@
 "use client";
 
-import { AddModuleExports, useModule } from "@/app/provider";
+import { AddModuleExports, moduleMemory, useModule } from "@/app/provider";
 import React, { useEffect, useRef, useState } from "react";
 
 interface WebGLProps {}
@@ -22,6 +22,8 @@ export const WebGL: React.FC<WebGLProps> = () => {
   return <WebGlCanvas inputRef={ref} module={module} />;
 };
 
+let keyBuffer: Uint8Array | null = null;
+
 interface WebGlCanvasProps {
   inputRef: React.RefObject<HTMLCanvasElement>;
   module: AddModuleExports | null;
@@ -32,10 +34,17 @@ const WebGlCanvas: React.FC<WebGlCanvasProps> = ({ inputRef, module }) => {
     if (!module) return;
 
     const addKey = (down: boolean) => (e: KeyboardEvent) => {
-      if (e.key.length === 1) {
-        module.keyboard(e.key.charCodeAt(0), down);
+      if (keyBuffer === null) {
+        const offset = module.keyboard_offset();
+        keyBuffer = new Uint8Array(moduleMemory.buffer, offset, 32);
       }
+      // Transfer key to wasm buffer
+      for (let i = 0; i < e.key.length; i++) {
+        keyBuffer[i] = e.key.charCodeAt(i);
+      }
+      module.register_keypress(e.key.length, down);
     };
+
     window.addEventListener("keydown", addKey(true));
     window.addEventListener("keyup", addKey(false));
 

@@ -17,6 +17,8 @@ pub fn build(b: *std.Build) void {
     lib.rdynamic = true;
     lib.import_memory = true;
     lib.stack_size = std.wasm.page_size;
+
+    // NOTE: Adjust initial/max memory as required
     lib.initial_memory = std.wasm.page_size * 18;
     lib.max_memory = std.wasm.page_size * 18;
 

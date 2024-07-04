@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 export interface AddModuleExports {
   init(): void;
   update(time: DOMHighResTimeStamp): void;
-  keyboard(key: number, down: boolean): void;
+  register_keypress(length: number, down: boolean): void;
+  keyboard_offset(): number;
 }
 
 export const moduleMemory = new WebAssembly.Memory({
