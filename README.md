@@ -25,6 +25,10 @@ code without writing any wrappers.
 The motivation behind this project was to try out tree-sitter, get more experience with using a C library in
 using C libraries in Zig, and also learning how the `extern` keyword can be used.
 
+- **Scraper:** Quick test trying to make scraper along the lines of the Go Colly library, which is really good at scraping a lot of data from websites.
+
+- **Wasm:** Basic tests compiling Zig to WASM and drawing to the canvas.
+
 ## Nix ❄️
 
 I'm a Nix enthusiast of course. You'll find a `flake.nix` file in each which can be used to develop with the correct
